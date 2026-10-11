@@ -10,7 +10,7 @@ from typing import Any, Protocol
 
 import numpy as np
 
-from orchestrator.models import MilestoneResult, Plan
+from orchestrator.models import Answer, MilestoneResult, Plan
 
 
 @dataclass
@@ -40,7 +40,7 @@ class LLM(Protocol):
         failed: str | None = None,
     ) -> Plan: ...
 
-    async def synthesize(self, text: str, results: list[MilestoneResult]) -> str: ...
+    async def synthesize(self, text: str, results: list[MilestoneResult]) -> Answer: ...
 
     async def extract_fields(self, content: str, extractor: str, source: str) -> dict[str, Any]: ...
 

@@ -18,7 +18,7 @@ from pydantic import ValidationError
 
 from orchestrator.llm.base import Triage, Usage
 from orchestrator.mac import tool_catalog
-from orchestrator.models import MilestoneResult, Plan
+from orchestrator.models import Answer, MilestoneResult, Plan
 from orchestrator.security import UNTRUSTED_RULES, fence
 
 UsageHook = Callable[[str, Usage], None]
@@ -72,9 +72,30 @@ Rules:
 
 Return JSON: {{"summary": string, "milestones": [ ... ], "unsupported": string or null}}"""
 
-SYNTH_SYSTEM = """You answer the user's request using milestone results.
-Be concise and concrete. Cite sources inline as Markdown links using only URLs that
-appear in the results. If results are missing or contradictory, say so plainly.
+SYNTH_SYSTEM = """You turn milestone results into a short answer for a Mac overlay, and
+choose what to pull up in the user's browser. The overlay is small: the browser is
+where the user reads and acts, so do not write paragraphs.
+
+Return JSON:
+{
+  "headline": the answer itself in at most 80 characters, e.g.
+              "Cheapest is $742 round trip on ANA, Mar 12 to 22" or
+              "Added 'Submit pitch' to Calendar at 4:45 PM",
+  "summary": one short sentence of supporting context (may be empty),
+  "rows": up to 6 comparison rows when the results compare options:
+          [{"label": site or item, "value": price/fact, "url": source URL}],
+  "open_urls": up to 3 URLs to open as browser tabs, best first
+}
+
+Choosing open_urls:
+- Open the pages where the user can see or act on the answer: the best result pages,
+  or a prefilled search on the best site when that is more useful (for flights,
+  https://www.google.com/travel/flights?q=<url-encoded query>; for products,
+  that retailer's search URL).
+- Use only URLs that appear in the results, or a search URL on a well-known site.
+- Use an empty list when the task was a local action (reminder, note, calendar
+  event) or a simple fact that needs no page.
+- If results are missing or contradictory, say so in the headline and summary.
 """ + UNTRUSTED_RULES
 
 EXTRACT_SYSTEM = """Extract the requested fields from the page as flat JSON.
@@ -182,7 +203,7 @@ class GeminiClient:
         except ValidationError as exc:
             raise GeminiError(f"gemini.plan: invalid plan: {exc.errors()[:3]}") from exc
 
-    async def synthesize(self, text: str, results: list[MilestoneResult]) -> str:
+    async def synthesize(self, text: str, results: list[MilestoneResult]) -> Answer:
         blocks = []
         for r in results:
             sources = ", ".join(s.url for s in r.sources)
@@ -192,7 +213,12 @@ class GeminiClient:
                 + fence(body, r.sources[0].url if r.sources else r.path, limit=8000)
             )
         prompt = f"User request:\n{text}\n\nResults:\n" + "\n\n".join(blocks)
-        return await self._generate("gemini.synthesize", self.plan_model, prompt, SYNTH_SYSTEM)
+        data = await self._generate_json("gemini.synthesize", self.plan_model, prompt,
+                                         SYNTH_SYSTEM)
+        try:
+            return Answer.model_validate(data)
+        except ValidationError as exc:
+            raise GeminiError(f"gemini.synthesize: invalid answer: {exc.errors()[:3]}") from exc
 
     async def extract_fields(self, content: str, extractor: str, source: str) -> dict[str, Any]:
         prompt = f"Fields: {extractor}\n\nPage:\n{fence(content, source)}"
