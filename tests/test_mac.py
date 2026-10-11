@@ -118,3 +118,76 @@ def test_automation_denial_is_explained() -> None:
     msg = mac._explain("execution error: Not authorized to send Apple events to Calendar. (-1743)",
                        'tell application "Calendar"')
     assert "System Settings > Privacy & Security > Automation" in msg and "Calendar" in msg
+
+
+# -- expanded tools (#53) -----------------------------------------------------------
+
+
+def test_every_tool_is_classified_once() -> None:
+    groups = [mac.READ_ONLY_TOOLS, mac.DISPLAY_TOOLS, mac.WRITE_TOOLS]
+    assert set().union(*groups) == set(mac.TOOLS)
+    assert sum(len(g) for g in groups) == len(mac.TOOLS)
+    # Acting as the user always needs Proceed.
+    assert {"run_shortcut", "type_text", "save_text_file", "quit_app"} <= mac.WRITE_TOOLS
+    # Drafts never send, so they don't.
+    assert {"draft_email", "draft_message"} <= mac.DISPLAY_TOOLS
+
+
+async def test_draft_message_builds_prefilled_messages_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[tuple[str, ...]] = []
+
+    async def fake(script: str, *args: str, timeout: float = 3.0) -> str:
+        seen.append(args)
+        return ""
+
+    monkeypatch.setattr(mac, "run_osascript", fake)
+    out = await mac.call_tool("draft_message", {"to": "978-221-1473", "body": "hey & hi"})
+    assert seen[0] == ("sms://open?addresses=978-221-1473&body=hey%20%26%20hi",)
+    assert "press Return to send" in out
+
+
+async def test_draft_message_needs_a_recipient() -> None:
+    with pytest.raises(mac.MacToolError, match="phone number"):
+        await mac.draft_message("!!!", "hi")
+
+
+async def test_media_control_rejects_unknown_action() -> None:
+    with pytest.raises(mac.MacToolError, match="action must be"):
+        await mac.media_control("rewind")
+
+
+async def test_files_outside_home_are_refused(tmp_path) -> None:
+    with pytest.raises(mac.MacToolError, match="home folder"):
+        await mac.open_file("/etc/hosts")
+
+
+async def test_save_text_file_never_overwrites(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setattr(mac, "PIP_FILES", tmp_path)
+    first = await mac.save_text_file("../../evil/plan", "one")
+    second = await mac.save_text_file("plan", "two")
+    assert first == str(tmp_path / "plan.md")
+    assert second == str(tmp_path / "plan (2).md")
+    assert (tmp_path / "plan.md").read_text() == "one"
+
+
+async def test_type_text_is_capped() -> None:
+    with pytest.raises(mac.MacToolError, match="2000"):
+        await mac.type_text("x" * 2001)
+
+
+def test_accessibility_denial_is_explained() -> None:
+    msg = mac._explain("System Events got an error: osascript is not allowed assistive "
+                       "access. (-1719)", "")
+    assert "Accessibility" in msg
+
+
+async def test_calendar_events_are_listed_by_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake(script: str, *args: str, timeout: float = 3.0) -> str:
+        return ("Standup\t2026-10-12T09:30:00\tWork\n"
+                "Dentist\t2026-10-12T08:00:00\tHome\n")
+
+    monkeypatch.setattr(mac, "run_osascript", fake)
+    out = await mac.list_calendar_events("2026-10-12")
+    assert out.splitlines() == ["08:00  Dentist  (Home)", "09:30  Standup  (Work)"]
