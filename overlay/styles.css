@@ -288,3 +288,41 @@ button { font: inherit; color: inherit; }
 .card.alert .buttons { margin-top: 12px; }
 .card.alert .btn { height: 36px; color: var(--text); font-size: 14px; }
 .card.alert .done-note { margin-top: 10px; color: var(--muted); font-size: 13px; }
+
+/* -- Permission setup ------------------------------------------------------------------- */
+
+/* The list scrolls; the card itself must not, or the buttons get clipped. */
+.card.setup { max-height: none; overflow: visible; }
+
+.perms {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+  border-radius: 14px;
+  background: var(--inset);
+  max-height: 280px;
+  overflow-y: auto;
+}
+.perms li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--line);
+}
+.perms li:first-child { border-top: 0; }
+.perms .what { flex: 1; min-width: 0; }
+.perms .name { font-weight: 600; }
+.perms .why { color: var(--muted); font-size: 13px; }
+.perms .state { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.perms .state.granted { color: var(--chip-nimble); }
+.perms .grant {
+  border: 0;
+  border-radius: 999px;
+  padding: 4px 12px;
+  background: var(--chip-mac-bg);
+  color: var(--accent);
+  font-size: 13px;
+  cursor: pointer;
+}
+.perms .grant:disabled { opacity: 0.5; cursor: default; }

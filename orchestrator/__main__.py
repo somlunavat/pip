@@ -9,6 +9,7 @@ from pathlib import Path
 
 import uvicorn
 
+from orchestrator import permissions
 from orchestrator.config import Settings
 from orchestrator.runtime import build_runtime
 from orchestrator.server import create_app
@@ -44,7 +45,8 @@ def main() -> None:
         await runtime.aclose()
 
     app = create_app(token=settings.token, agent=runtime.agent, llm=runtime.llm,
-                     hub=runtime.hub, feedback=runtime.watchers.feedback, lifespan=lifespan)
+                     hub=runtime.hub, feedback=runtime.watchers.feedback,
+                     permissions=permissions, lifespan=lifespan)
     logging.info("listening on ws://%s:%s/ws (token in %s)", settings.host, settings.port,
                  TOKEN_FILE)
     uvicorn.run(app, host=settings.host, port=settings.port, log_level="warning")

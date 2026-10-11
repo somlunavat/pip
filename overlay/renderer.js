@@ -287,6 +287,92 @@ function renderPlan(msg) {
   window.pip.show();
 }
 
+// -- permission setup ---------------------------------------------------------------
+// Shown on first run while anything is missing, and whenever you type "setup".
+// Every grant is a macOS prompt the user answers; Pip can't grant itself anything.
+
+let setupCard = null;
+let setupWanted = false;
+
+function firstRun() {
+  try { return !localStorage.getItem('pip.setupSeen'); } catch { return false; }
+}
+
+function markSetupSeen() {
+  try { localStorage.setItem('pip.setupSeen', '1'); } catch { /* private mode */ }
+}
+
+function renderPermissions(msg) {
+  const missing = msg.items.filter((i) => i.status !== 'granted');
+  if (!setupCard && !(setupWanted || (firstRun() && missing.length))) return;
+  setupWanted = false;
+  if (!setupCard) {
+    setupCard = fromTemplate('tpl-setup');
+    setupCard.addEventListener('click', onSetupClick);
+    stack.prepend(setupCard);
+    window.pip.show();
+  }
+  $('.touches', setupCard).textContent = missing.length
+    ? `Pip asks macOS for each one and you approve the prompt. Granted to ${msg.holder}.`
+    : `All set. Pip has everything it can use, granted to ${msg.holder}.`;
+  const list = $('.perms', setupCard);
+  list.replaceChildren();
+  for (const item of msg.items) {
+    const li = document.createElement('li');
+    const what = document.createElement('div');
+    what.className = 'what';
+    const name = document.createElement('div');
+    name.className = 'name';
+    name.textContent = item.name;
+    const why = document.createElement('div');
+    why.className = 'why';
+    why.textContent = item.why;
+    what.append(name, why);
+    li.append(what);
+    if (item.status === 'granted') {
+      const state = document.createElement('span');
+      state.className = 'state granted';
+      state.textContent = 'Allowed';
+      li.append(state);
+    } else {
+      const btn = document.createElement('button');
+      btn.className = 'grant';
+      btn.dataset.id = item.id;
+      btn.textContent = item.status === 'denied' ? 'Open Settings' : 'Grant';
+      li.append(btn);
+    }
+    list.appendChild(li);
+  }
+  const grantAll = $('[data-act="grant-all"]', setupCard);
+  grantAll.textContent = missing.length ? 'Grant all' : 'Done';
+  grantAll.disabled = false;
+  fit();
+}
+
+function onSetupClick(e) {
+  const one = e.target.closest('.grant');
+  const act = e.target.closest('[data-act]')?.dataset.act;
+  if (one) {
+    one.disabled = true;
+    one.textContent = 'Waiting…';
+    send({ type: 'grant', ids: [one.dataset.id] });
+  } else if (act === 'grant-all' && e.target.textContent !== 'Done') {
+    e.target.disabled = true;
+    e.target.textContent = 'Answer the prompts…';
+    send({ type: 'grant' });
+  } else if (act) {
+    markSetupSeen();
+    setupCard.remove();
+    setupCard = null;
+    fit();
+  }
+}
+
+function openSetup() {
+  setupWanted = true;
+  send({ type: 'permissions' });
+}
+
 function renderAlert(msg) {
   const card = fromTemplate('tpl-alert');
   $('.alert-title', card).textContent = `Change on ${hostname(msg.target)}`;
@@ -327,6 +413,10 @@ function progressText(task, msg) {
 function handle(msg) {
   switch (msg.type) {
     case 'hello':
+      send({ type: 'permissions' });
+      break;
+    case 'permissions':
+      renderPermissions(msg);
       break;
     case 'transcript':
       pendingTitle = msg.text;
@@ -392,6 +482,11 @@ function handle(msg) {
 // -- input --------------------------------------------------------------------------------
 
 input.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && /^(setup|permissions)$/i.test(input.value.trim())) {
+    input.value = '';
+    openSetup();
+    return;
+  }
   if (e.key === 'Enter' && input.value.trim()) {
     const text = input.value.trim();
     if (send({ type: 'request', text })) {
