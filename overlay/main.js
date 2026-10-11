@@ -14,6 +14,8 @@ const { app, BrowserWindow, clipboard, globalShortcut, ipcMain, screen,
   session, shell, systemPreferences } = require('electron');
 const { spawn } = require('child_process');
 const fs = require('fs');
+const net = require('net');
+const os = require('os');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -26,6 +28,10 @@ let toastWin = null; // notification popups, top-right; never takes focus
 let clickwatch = null;
 const TOAST_WIDTH = 420;
 const CLICKWATCH = path.join(__dirname, 'bin', 'clickwatch');
+const LISTENER_APP = path.join(__dirname, 'bin', 'PipListener.app');
+const WAKE_SOCKET = path.join(os.tmpdir(), `pip-wake-${process.getuid()}.sock`);
+let wakeServer = null;
+let wakeLink = null;
 
 function readToken() {
   if (process.env.PIP_TOKEN) return process.env.PIP_TOKEN.trim();
@@ -158,6 +164,53 @@ function insideWindow(x, y) {
   return x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height;
 }
 
+// "Hey Pip": PipListener.app (on-device speech) connects back over a Unix socket.
+// It is launched with `open` so it is its own app to macOS and owns its Microphone
+// and Speech Recognition permissions.
+function startWake() {
+  if (wakeServer || !fs.existsSync(LISTENER_APP)) {
+    if (!fs.existsSync(LISTENER_APP)) win.webContents.send('overlay:wake', { phase: 'missing' });
+    return;
+  }
+  fs.rmSync(WAKE_SOCKET, { force: true });
+  wakeServer = net.createServer((sock) => {
+    wakeLink?.destroy();
+    wakeLink = sock;
+    let buffer = '';
+    sock.setEncoding('utf8');
+    sock.on('data', (chunk) => {
+      buffer += chunk;
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) onWakeLine(line.trim());
+    });
+    sock.on('close', () => { if (wakeLink === sock) wakeLink = null; });
+  });
+  wakeServer.listen(WAKE_SOCKET, () => {
+    fs.chmodSync(WAKE_SOCKET, 0o600);
+    spawn('/usr/bin/open', ['-g', '-n', '-a', LISTENER_APP, '--args', '--socket', WAKE_SOCKET],
+      { stdio: 'ignore', detached: true }).unref();
+  });
+}
+
+function stopWake() {
+  wakeLink?.write('quit\n');
+  wakeLink?.destroy();
+  wakeLink = null;
+  wakeServer?.close();
+  wakeServer = null;
+  fs.rmSync(WAKE_SOCKET, { force: true });
+}
+
+function onWakeLine(line) {
+  const [phase, ...rest] = line.split(' ');
+  const text = rest.join(' ');
+  if (phase === 'wake') show(true);
+  if (['ready', 'wake', 'command', 'cancel', 'error'].includes(phase)) {
+    win.webContents.send('overlay:wake', { phase, text });
+  }
+}
+
 function wireClosing() {
   // Esc belongs to other apps except while the overlay is on screen.
   win.on('show', () => {
@@ -202,6 +255,7 @@ app.whenReady().then(async () => {
     win.setSize(w, h, true);
   });
   ipcMain.on('overlay:hide', () => hide());
+  ipcMain.on('overlay:set-wake', (_e, on) => (on ? startWake() : stopWake()));
   ipcMain.on('overlay:show', () => show(false));
   ipcMain.on('overlay:open-urls', (_e, urls) => {
     for (const url of (Array.isArray(urls) ? urls : []).slice(0, 5)) {
@@ -243,5 +297,6 @@ app.whenReady().then(async () => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   stopClickwatch();
+  stopWake();
 });
 app.on('window-all-closed', (e) => e.preventDefault());

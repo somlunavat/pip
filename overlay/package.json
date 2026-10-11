@@ -8,7 +8,7 @@
   "main": "main.js",
   "scripts": {
     "postinstall": "node node_modules/electron/install.js && npm run build:native",
-    "build:native": "mkdir -p bin && (swiftc -O native/clickwatch.swift -o bin/clickwatch || echo 'clickwatch not built: install Xcode command line tools for double-click-outside to close')",
+    "build:native": "bash native/build.sh",
     "start": "electron .",
     "check": "for f in *.js; do node --check \"$f\" || exit 1; done"
   },

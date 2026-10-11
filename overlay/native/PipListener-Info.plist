@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>com.somlunavat.pip.listener</string>
+  <key>CFBundleName</key>
+  <string>Pip Listener</string>
+  <key>CFBundleDisplayName</key>
+  <string>Pip Listener</string>
+  <key>CFBundleExecutable</key>
+  <string>PipListener</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.0</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>13.0</string>
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Pip listens for “Hey Pip” so you can ask it things hands-free. Audio is processed on your Mac and never leaves it.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Pip turns what you say after “Hey Pip” into text, on your Mac. Nothing is sent to a server.</string>
+</dict>
+</plist>

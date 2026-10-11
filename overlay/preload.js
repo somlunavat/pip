@@ -18,4 +18,6 @@ contextBridge.exposeInMainWorld('pip', {
   onShown: (fn) => ipcRenderer.on('overlay:shown', () => fn()),
   onHidden: (fn) => ipcRenderer.on('overlay:hidden', () => fn()),
   onToggleRecord: (fn) => ipcRenderer.on('overlay:toggle-record', () => fn()),
+  setWake: (on) => ipcRenderer.send('overlay:set-wake', Boolean(on)),
+  onWake: (fn) => ipcRenderer.on('overlay:wake', (_e, event) => fn(event)),
 });
