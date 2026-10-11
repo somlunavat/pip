@@ -7,9 +7,11 @@ the code is written fresh. Every step writes a task_events row.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from orchestrator import mac, verifier
@@ -29,6 +31,41 @@ WatchFn = Callable[[Milestone, str], Awaitable[MilestoneResult]]
 
 class PlanError(ValueError):
     pass
+
+
+# Errors that a retry cannot fix; retrying only delays the answer.
+PERMANENT_ERRORS = {"no_worker_configured", "no_watcher_registry", "no_tool", "no_worker",
+                    "no_watch_spec", "MacToolError"}
+
+# Things that only exist on the user's Mac. A remote worker can never reach them.
+_MAC_ONLY = re.compile(
+    r"\b(calendar|reminders?|apple notes|notes app|imessages?|messages app|text messages?|"
+    r"sms|finder|my mac|desktop|clipboard|contacts app|system settings|music app)\b",
+    re.IGNORECASE,
+)
+
+
+def check_plan(plan: Plan, *, has_workers: bool) -> list[str]:
+    """Problems that would make a plan fail part-way. Checked before the gate so a
+    doomed plan never runs its first steps."""
+    problems: list[str] = []
+    for m in plan.milestones:
+        if m.kind == "local":
+            if not m.tool:
+                problems.append(f"{m.id}: local milestone has no tool")
+            elif problem := mac.validate_args(m.tool, m.args):
+                problems.append(f"{m.id}: {problem}")
+        elif m.kind == "work" or (m.kind == "read" and path_for(m) == "worker"):
+            if _MAC_ONLY.search(m.goal):
+                problems.append(
+                    f"{m.id}: '{m.goal}' is on the user's Mac, but workers are remote "
+                    "computers that cannot reach it; use a local tool or mark it unsupported"
+                )
+            elif not has_workers:
+                problems.append(f"{m.id}: needs an Agent37 worker and none is configured")
+        elif m.kind == "watch" and m.watch is None:
+            problems.append(f"{m.id}: watch milestone has no watch spec")
+    return problems
 
 
 def dependency_groups(plan: Plan) -> list[list[Milestone]]:
@@ -119,7 +156,8 @@ class Agent:
                    context: dict[str, str] | None, start: float) -> TaskOutcome:
         # Sense
         t0 = time.perf_counter()
-        ctx = context if context is not None else await self.sense()
+        ctx = dict(context if context is not None else await self.sense())
+        ctx.setdefault("now", datetime.now().astimezone().isoformat(timespec="minutes"))
         self.db.log_event("sense", task_id=task_id, latency_ms=_ms(t0))
 
         # Fast path for small talk
@@ -131,8 +169,23 @@ class Agent:
                         "paths": ["fast"]})
             return TaskOutcome(task_id, "done", triage.reply)
 
-        # Plan
+        # Plan, then validate before anything runs
         plan = await self.llm.plan(text, ctx)
+        problems = [] if plan.unsupported else self._problems(plan)
+        if problems:
+            self.db.log_event("plan", task_id=task_id, status="invalid",
+                              error_code=problems[0][:120])
+            plan = await self.llm.plan(text, {**ctx, "plan_problems": "\n".join(problems)})
+            problems = [] if plan.unsupported else self._problems(plan)
+        if plan.unsupported or problems or not plan.milestones:
+            reason = (plan.unsupported
+                      or (f"I can't do that yet: {problems[0].split(': ', 1)[-1]}" if problems
+                          else "I couldn't work out how to do that."))
+            self.db.log_event("plan", task_id=task_id, status="unsupported")
+            await emit({"type": "response", "task_id": task_id, "text": reason,
+                        "display": "pill", "sources": [], "elapsed_ms": _ms(start),
+                        "paths": []})
+            return TaskOutcome(task_id, "unsupported", reason)
         layers = dependency_groups(plan)
         for m in plan.milestones:
             self.db.create_subtask(task_id, f"{task_id}:{m.id}", m.kind, m.goal)
@@ -200,15 +253,24 @@ class Agent:
                     m.id = prefix + m.id
                     m.depends_on = [prefix + d for d in m.depends_on]
                     self.db.create_subtask(task_id, f"{task_id}:{m.id}", m.kind, m.goal)
-                pending = dependency_groups(new_plan)
-                self.db.log_event("replan", task_id=task_id, status="ok")
+                bad = new_plan.unsupported or self._problems(new_plan)
+                pending = [] if bad else dependency_groups(new_plan)
+                self.db.log_event("replan", task_id=task_id, status="invalid" if bad else "ok")
         return list(results.values())
+
+    def _problems(self, plan: Plan) -> list[str]:
+        try:
+            dependency_groups(plan)
+        except PlanError as exc:
+            return [f"plan: {exc}"]
+        return check_plan(plan, has_workers=self.work is not None)
 
     async def _run_verified(self, task_id: str, m: Milestone, emit: Emit) -> MilestoneResult:
         """Run once, verify, retry once on failure."""
         result = await self._run_one(task_id, m, emit)
         passed, reason = verifier.check(m, result)
-        if not passed and m.kind != "read":  # reads already escalated through tiers
+        retryable = result.error not in PERMANENT_ERRORS
+        if not passed and retryable and m.kind != "read":  # reads already escalated
             await emit({"type": "doing", "task_id": task_id, "milestone_id": m.id,
                         "label": f"Retrying: {m.goal}", "path": result.path})
             result = await self._run_one(task_id, m, emit)
