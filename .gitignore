@@ -19,6 +19,7 @@ data/
 # Node / Electron
 node_modules/
 overlay/out/
+overlay/bin/
 
 # OS / editors
 .DS_Store
