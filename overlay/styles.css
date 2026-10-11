@@ -128,6 +128,21 @@ button { font: inherit; color: inherit; }
 .mic svg { width: 18px; height: 18px; fill: var(--muted); }
 .mic.on { background: var(--danger); }
 
+.stop {
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border: 0;
+  border-radius: 50%;
+  background: var(--inset);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.stop[hidden] { display: none; }
+.stop svg { width: 16px; height: 16px; fill: var(--danger); }
+.stop:hover { filter: brightness(0.95); }
+
 .close {
   width: 28px;
   height: 28px;

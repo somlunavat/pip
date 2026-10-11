@@ -7,6 +7,7 @@ the code is written fresh. Every step writes a task_events row.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import re
 import time
 from collections.abc import Awaitable, Callable
@@ -155,6 +156,17 @@ class Agent:
         await emit({"type": "thinking", "task_id": task_id})
         try:
             outcome = await self._run(task_id, text, emit, approve, context, start)
+        except asyncio.CancelledError:
+            # The user pressed Stop. Worker turns cancel themselves on the way out.
+            self.db.finish_task(task_id, "cancelled")
+            self.db.log_event("task", task_id=task_id, latency_ms=_ms(start),
+                              status="cancelled")
+            with contextlib.suppress(Exception):
+                await emit({"type": "response", "task_id": task_id, "text": "Stopped.",
+                            "display": "pill", "sources": [], "elapsed_ms": _ms(start),
+                            "paths": [], "answer": {"headline": "Stopped.", "summary": "",
+                                                    "rows": []}})
+            raise
         except BudgetExceeded as exc:
             outcome = TaskOutcome(task_id, "blocked", f"Stopped: {exc}")
             self.db.log_event("guard", task_id=task_id, status="blocked", error_code="budget")
