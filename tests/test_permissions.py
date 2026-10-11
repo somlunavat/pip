@@ -91,3 +91,10 @@ def test_every_mapped_permission_exists() -> None:
         from orchestrator import mac
         assert tool in mac.TOOLS, tool
         assert all(p in permissions.BY_ID for p in pids), tool
+
+
+def test_custom_actions_get_a_per_app_permission() -> None:
+    assert permissions.needed_for(["custom_applescript:Spotify"]) == ["automation:Spotify"]
+    perm = permissions.BY_ID["automation:Spotify"]
+    assert perm.kind == "automation" and perm.probe == 'tell application "Spotify" to get name'
+    assert permissions.classify("automation:Spotify") == "ask_os"
