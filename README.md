@@ -88,8 +88,13 @@ VS Code). If you start Pip from a different app later, grant them again there.
 ### Agent37 workers
 
 ```bash
-# Needs a topped-up wallet: the free tier allows one instance.
+# Needs a topped-up wallet: the free tier allows one instance at a time.
 python scripts/create_workers.py --count 2 --credit 3 --cap 10
+
+# Free tier, or you already made an instance in the dashboard: use it instead.
+python scripts/create_workers.py --list
+python scripts/create_workers.py --adopt <instance-id>
+
 # Paste the printed AGENT37_WORKERS=... line into .env and restart the orchestrator.
 ```
 
