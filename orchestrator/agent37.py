@@ -143,9 +143,27 @@ class Agent37Control:
     async def fork(self, instance_id: str) -> dict[str, Any]:
         return await self._call("POST", f"/v1/instances/{instance_id}/fork")
 
-    async def top_up(self, instance_id: str, usd: float) -> dict[str, Any]:
-        return await self._call("POST", f"/v1/instances/{instance_id}/budget/top-up",
-                                {"credit_micros": int(usd * 1_000_000)})
+    async def top_up(self, instance_id: str, usd: float,
+                     idempotency_key: str | None = None) -> dict[str, Any]:
+        """Add one-time model credit (a ceiling; the workspace wallet pays)."""
+        body: dict[str, Any] = {"amount_micros": int(usd * 1_000_000)}
+        if idempotency_key:
+            body["idempotency_key"] = idempotency_key
+        return await self._call("POST", f"/v1/instances/{instance_id}/budget/top-up", body)
+
+    async def list_instances(self) -> list[dict[str, Any]]:
+        body = await self._call("GET", "/v1/instances")
+        return body.get("data", []) if isinstance(body, dict) else list(body)
+
+    async def get_instance(self, instance_id: str) -> dict[str, Any]:
+        return await self._call("GET", f"/v1/instances/{instance_id}")
+
+    async def get_budget(self, instance_id: str) -> dict[str, Any]:
+        return await self._call("GET", f"/v1/instances/{instance_id}/budget")
+
+    async def set_monthly_cap(self, instance_id: str, usd: float) -> dict[str, Any]:
+        return await self._call("PATCH", f"/v1/instances/{instance_id}/budget",
+                                {"monthly_cap_micros": int(usd * 1_000_000)})
 
     async def usage(self) -> dict[str, Any]:
         return await self._call("GET", "/v1/usage")
