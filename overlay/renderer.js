@@ -9,6 +9,7 @@ const titleEl = $('#title');
 const subtitleEl = $('#subtitle');
 const stack = $('#stack');
 const micBtn = $('#mic');
+const stopBtn = $('#stop');
 
 const PATHS = {
   nimble: ['Nimble', 'nimble'], worker: ['Agent37 worker', 'worker'], mac: ['Mac', 'mac'],
@@ -29,6 +30,7 @@ let pipTimer = null;
 const tasks = new Map(); // task_id -> { card, steps, seen:Set, title }
 let pendingCard = null;  // card created before the server assigns a task id
 let pendingTitle = '';
+let currentTaskId = null; // the task the pill is showing; Stop applies to it
 
 // -- Pip -----------------------------------------------------------------------
 
@@ -45,6 +47,19 @@ function setPip(state, holdMs = 0) {
 function busy() {
   return [...tasks.values()].some((t) => !t.done);
 }
+
+// Stop shows while the task in the pill is still running.
+function updateStop() {
+  const task = currentTaskId && tasks.get(currentTaskId);
+  stopBtn.hidden = !(task && !task.done);
+}
+
+stopBtn.addEventListener('click', () => {
+  if (!currentTaskId) return;
+  send({ type: 'stop', task_id: currentTaskId });
+  stopBtn.hidden = true;
+  setSubtitle('Stopping…');
+});
 
 // -- closing ---------------------------------------------------------------------
 // The overlay never closes by itself. It closes only on a clear user action:
@@ -172,6 +187,8 @@ function taskFor(taskId) {
   const task = { card, steps: 0, seen: new Set(), running: new Map(), finished: 0, title,
     done: false };
   tasks.set(taskId, task);
+  currentTaskId = taskId;
+  updateStop();
   return task;
 }
 
@@ -185,6 +202,7 @@ function chip(text, cls = '') {
 function renderResponse(msg) {
   const task = taskFor(msg.task_id);
   task.done = true;
+  updateStop();
   const { card } = task;
   card.classList.remove('pending');
 
@@ -469,6 +487,7 @@ function handle(msg) {
       if (msg.task_id) {
         const task = taskFor(msg.task_id);
         task.done = true;
+        updateStop();
         task.card.classList.remove('pending');
         task.card.classList.add('brief');
         $('.headline', task.card).textContent = 'Something went wrong';

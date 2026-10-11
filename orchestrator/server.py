@@ -61,6 +61,7 @@ class Session:
         self.permissions = permissions
         self.approvals: dict[str, asyncio.Future[bool]] = {}
         self.tasks: set[asyncio.Task[Any]] = set()
+        self.running: dict[str, asyncio.Task[Any]] = {}  # task_id -> request task
         self._send_lock = asyncio.Lock()
 
     async def send(self, message: dict[str, Any]) -> None:
@@ -83,6 +84,14 @@ class Session:
             task = asyncio.create_task(self._request(msg))
             self.tasks.add(task)
             task.add_done_callback(self.tasks.discard)
+        elif kind == "stop":
+            task_id = str(msg.get("task_id"))
+            fut = self.approvals.get(task_id)
+            if fut and not fut.done():
+                fut.set_result(False)
+            running = self.running.get(task_id)
+            if running and not running.done():
+                running.cancel()
         elif kind in ("approve", "cancel"):
             fut = self.approvals.get(str(msg.get("task_id")))
             if fut and not fut.done():
@@ -114,6 +123,14 @@ class Session:
         await self.send({"type": "permissions", **result})
 
     async def _request(self, msg: dict[str, Any]) -> None:
+        me = asyncio.current_task()
+
+        async def emit(event: dict[str, Any]) -> None:
+            task_id = event.get("task_id")
+            if task_id and me is not None:
+                self.running.setdefault(task_id, me)  # lets Stop find this request
+            await self.send(event)
+
         try:
             text = str(msg.get("text") or "").strip()
             if msg.get("audio"):
@@ -126,11 +143,16 @@ class Session:
             if not text:
                 await self.send({"type": "error", "message": "empty request"})
                 return
-            await self.agent.handle(text, self.send, self.approve)
+            await self.agent.handle(text, emit, self.approve)
+        except asyncio.CancelledError:
+            pass  # stopped by the user; the agent already said so
         except (ValueError, binascii.Error) as exc:
             await self.send({"type": "error", "message": str(exc)})
         except Exception:
             log.exception("request failed")  # the agent already emitted an error event
+        finally:
+            for task_id in [t for t, task in self.running.items() if task is me]:
+                del self.running[task_id]
 
     async def close(self) -> None:
         for task in self.tasks:

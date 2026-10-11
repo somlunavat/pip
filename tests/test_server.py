@@ -122,3 +122,26 @@ def test_permissions_report_and_grant(db: Database) -> None:
         second = ws.receive_json()
     assert first["holder"] == "Terminal" and first["items"][0]["status"] == "denied"
     assert second["items"][0]["status"] == "granted" and perms.granted == ["screen"]
+
+
+def test_stop_cancels_a_running_task(db: Database) -> None:
+    import asyncio
+
+    async def slow_reader(m: Milestone) -> MilestoneResult:
+        await asyncio.sleep(30)
+        raise AssertionError("should have been stopped")
+
+    llm = FakeLLM([{"milestones": [{"id": "m1", "goal": "slow read", "kind": "read",
+                                    "query": "x"}]}])
+    agent = Agent(db, llm, ReadRouter([Tier("nimble", slow_reader)]), SpendGuard(db, 100),
+                  sense=no_context, mac_call=fake_mac, browser=None, reveal=None)
+    with TestClient(create_app(token="secret", agent=agent, llm=llm)) as c, \
+            c.websocket_connect("/ws?token=secret") as ws:
+        ws.receive_json()
+        ws.send_json({"type": "request", "text": "slow"})
+        doing = drain_until(ws, "doing")[-1]
+        ws.send_json({"type": "stop", "task_id": doing["task_id"]})
+        resp = drain_until(ws, "response")[-1]
+    assert resp["text"] == "Stopped."
+    row = db.one("SELECT status FROM tasks WHERE id = ?", (doing["task_id"],))
+    assert row["status"] == "cancelled"
