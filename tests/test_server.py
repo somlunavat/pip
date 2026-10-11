@@ -32,7 +32,7 @@ async def fake_mac(tool: str, args: dict) -> str:
 
 def client(db: Database, llm: FakeLLM) -> TestClient:
     agent = Agent(db, llm, ReadRouter([Tier("nimble", reader)]), SpendGuard(db, 100),
-                  sense=no_context, mac_call=fake_mac, browser=None)
+                  sense=no_context, mac_call=fake_mac, browser=None, reveal=None)
     return TestClient(create_app(token="secret", agent=agent, llm=llm))
 
 
@@ -112,7 +112,7 @@ def test_permissions_report_and_grant(db: Database) -> None:
     perms = FakePermissions()
     llm = FakeLLM()
     agent = Agent(db, llm, ReadRouter([Tier("nimble", reader)]), SpendGuard(db, 100),
-                  sense=no_context, mac_call=fake_mac, browser=None)
+                  sense=no_context, mac_call=fake_mac, browser=None, reveal=None)
     app = create_app(token="secret", agent=agent, llm=llm, permissions=perms)
     with TestClient(app) as c, c.websocket_connect("/ws?token=secret") as ws:
         ws.receive_json()

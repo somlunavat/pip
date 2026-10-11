@@ -219,10 +219,14 @@ function renderResponse(msg) {
   if (msg.elapsed_ms != null) chips.appendChild(chip(`${(msg.elapsed_ms / 1000).toFixed(1)} s`));
   const sources = (msg.sources || []).map((s) => s.url);
   if (sources.length) chips.appendChild(chip(`${sources.length} source${sources.length > 1 ? 's' : ''}`));
+  const files = msg.files || [];
+  if (files.length) chips.appendChild(chip(`${files.length} file${files.length > 1 ? 's' : ''}`, 'worker'));
+  $('[data-act="files"]', card).hidden = !files.length;
+  card.dataset.folder = files[0] || '';
 
   const brief = msg.display === 'pill';
   card.classList.toggle('brief', brief);
-  $('.foot', card).hidden = brief && !sources.length;
+  $('.foot', card).hidden = brief && !sources.length && !files.length;
   $('[data-act="open"]', card).hidden = !sources.length;
   card.dataset.sources = JSON.stringify(sources);
   card.dataset.copy = [answer.headline, answer.summary,
@@ -247,6 +251,8 @@ stack.addEventListener('click', (e) => {
     setTimeout(() => { e.target.textContent = 'Copy'; }, 1200);
   } else if (act === 'open') {
     window.pip.openUrls(JSON.parse(card.dataset.sources || '[]'));
+  } else if (act === 'files') {
+    window.pip.showFile(card.dataset.folder);
   }
 });
 

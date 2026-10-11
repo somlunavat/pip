@@ -172,6 +172,13 @@ app.whenReady().then(async () => {
     }
   });
   ipcMain.on('overlay:copy', (_e, text) => clipboard.writeText(String(text).slice(0, 10000)));
+  ipcMain.on('overlay:show-file', (_e, target) => {
+    // Only files inside the home folder (worker downloads land in ~/Downloads/Pip).
+    const resolved = path.resolve(String(target));
+    if (resolved.startsWith(app.getPath('home') + path.sep) && fs.existsSync(resolved)) {
+      shell.showItemInFolder(resolved);
+    }
+  });
   ipcMain.on('overlay:notify', (_e, { title, body }) => {
     // Alerts surface as a macOS notification when the overlay is hidden.
     if (!win.isVisible() && Notification.isSupported()) {

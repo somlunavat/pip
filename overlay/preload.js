@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('pip', {
   notify: (title, body) => ipcRenderer.send('overlay:notify', { title, body }),
   openUrls: (urls) => ipcRenderer.send('overlay:open-urls', urls),
   copy: (text) => ipcRenderer.send('overlay:copy', text),
+  showFile: (path) => ipcRenderer.send('overlay:show-file', path),
   onShown: (fn) => ipcRenderer.on('overlay:shown', () => fn()),
   onHidden: (fn) => ipcRenderer.on('overlay:hidden', () => fn()),
   onToggleRecord: (fn) => ipcRenderer.on('overlay:toggle-record', () => fn()),
