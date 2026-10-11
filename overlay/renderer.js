@@ -345,6 +345,57 @@ function renderPlan(msg) {
   });
 }
 
+// -- access on demand ---------------------------------------------------------------
+// A task needs a permission Pip doesn't have: ask right there. Grant triggers the
+// macOS prompt (or the right Settings pane) and the task carries on.
+
+function renderAccess(msg) {
+  const task = taskFor(msg.task_id, { background: !!msg.background });
+  const card = fromTemplate('tpl-access');
+  $('.headline', card).textContent = msg.text;
+  const list = $('.perms', card);
+  for (const item of msg.items) {
+    const li = document.createElement('li');
+    const what = document.createElement('div');
+    what.className = 'what';
+    const name = document.createElement('div');
+    name.className = 'name';
+    name.textContent = item.name;
+    const why = document.createElement('div');
+    why.className = 'why';
+    why.textContent = `to ${item.why}`;
+    what.append(name, why);
+    li.append(what);
+    list.appendChild(li);
+  }
+  card.addEventListener('click', (e) => {
+    const grant = e.target.closest('[data-grant]')?.dataset.grant;
+    if (grant === undefined) return;
+    send({ type: 'access', task_id: msg.task_id, grant: grant === 'true' });
+    card.remove();
+    task.planCard = null;
+    pendingPlans.delete(msg.task_id);
+    window.pip.toastRemove(`task:${msg.task_id}`);
+    if (!task.background) {
+      setSubtitle(grant === 'true' ? 'Answer the macOS prompt…' : 'Not now');
+      setPip(grant === 'true' ? 'working' : 'idle');
+    }
+    fit();
+  });
+  task.card.before(card);
+  task.planCard = card; // a popup click brings it to the top like a plan
+  pendingPlans.add(msg.task_id);
+  if (!task.background) {
+    setSubtitle('Pip needs your OK for access');
+    setPip('listening');
+  }
+  toast({
+    id: `task:${msg.task_id}`, kind: 'plan', taskId: msg.task_id, state: 'listening',
+    sticky: true, title: msg.text,
+    body: msg.items.map((i) => `${i.name}: to ${i.why}`).join(' · '),
+  });
+}
+
 // -- permission setup ---------------------------------------------------------------
 // Shown on first run while anything is missing, and whenever you type "setup".
 // Every grant is a macOS prompt the user answers; Pip can't grant itself anything.
@@ -526,6 +577,9 @@ function handle(msg) {
     }
     case 'plan':
       renderPlan(msg);
+      break;
+    case 'permission_needed':
+      renderAccess(msg);
       break;
     case 'response':
       renderResponse(msg);

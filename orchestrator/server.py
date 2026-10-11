@@ -36,7 +36,7 @@ class PermissionsApi(Protocol):
 
 
 # Events from a background task that every overlay should hear about.
-BROADCAST_EVENTS = {"thinking", "plan", "response", "error"}
+BROADCAST_EVENTS = {"thinking", "plan", "permission_needed", "response", "error"}
 
 
 class Hub:
@@ -63,14 +63,18 @@ class Hub:
                 self.clients.discard(ws)
 
     async def approve(self, task_id: str, plan: Plan) -> bool:
+        return await self.wait(task_id)
+
+    async def wait(self, key: str) -> bool:
+        """Wait for any client to answer yes/no for key (a plan or an access request)."""
         fut: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
-        self.approvals[task_id] = fut
+        self.approvals[key] = fut
         try:
             return await asyncio.wait_for(fut, APPROVAL_TIMEOUT_S)
         except TimeoutError:
             return False
         finally:
-            self.approvals.pop(task_id, None)
+            self.approvals.pop(key, None)
 
     def decide(self, task_id: str, approved: bool) -> None:
         fut = self.approvals.get(task_id)
@@ -79,6 +83,7 @@ class Hub:
 
     def stop(self, task_id: str) -> None:
         self.decide(task_id, False)
+        self.decide(f"access:{task_id}", False)
         running = self.running.get(task_id)
         if running and not running.done():
             running.cancel()
@@ -118,6 +123,8 @@ class Session:
             self.hub.stop(str(msg.get("task_id")))
         elif kind in ("approve", "cancel"):
             self.hub.decide(str(msg.get("task_id")), kind == "approve")
+        elif kind == "access":
+            self.hub.decide(f"access:{msg.get('task_id')}", bool(msg.get("grant")))
         elif kind == "feedback" and self.feedback:
             result = await self.feedback(str(msg.get("change_id")), bool(msg.get("useful")))
             await self.send({"type": "feedback_ack", **result})
@@ -143,6 +150,15 @@ class Session:
             await self.send({"type": "error", "message": f"Permission setup failed: {exc}"})
             return
         await self.send({"type": "permissions", **result})
+
+    async def _access(self, task_id: str, ids: list[str]) -> bool:
+        """The user said yes to the access card: ask macOS for each permission."""
+        if not await self.hub.wait(f"access:{task_id}"):
+            return False
+        if self.permissions:
+            report = await self.permissions.request_all(ids)
+            await self.hub.broadcast({"type": "permissions", **report})
+        return True
 
     async def _reply(self, event: dict[str, Any]) -> None:
         """Send to the requester; a background task's requester may be gone."""
@@ -177,7 +193,7 @@ class Session:
             if not text:
                 await self._reply({"type": "error", "message": "empty request"})
                 return
-            await self.agent.handle(text, emit, self.hub.approve)
+            await self.agent.handle(text, emit, self.hub.approve, access=self._access)
         except asyncio.CancelledError:
             pass  # stopped by the user; the agent already said so
         except (ValueError, binascii.Error) as exc:

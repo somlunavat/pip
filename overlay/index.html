@@ -65,6 +65,23 @@
     </article>
   </template>
 
+  <template id="tpl-access">
+    <article class="card plan access">
+      <header class="plan-head">
+        <img class="pip small" src="assets/pip/pip-listening.svg" alt="">
+        <div>
+          <h2 class="headline"></h2>
+          <p class="touches">You'll approve it in the macOS prompt. Pip can't grant itself access.</p>
+        </div>
+      </header>
+      <ul class="perms"></ul>
+      <div class="buttons">
+        <button class="btn" data-grant="false">Not now</button>
+        <button class="btn primary" data-grant="true">Grant access</button>
+      </div>
+    </article>
+  </template>
+
   <template id="tpl-setup">
     <article class="card setup">
       <header class="plan-head">

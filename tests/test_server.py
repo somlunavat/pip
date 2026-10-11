@@ -209,3 +209,30 @@ def test_foreground_task_is_not_broadcast(db: Database) -> None:
             assert drain_until(me, "response")[-1]["text"] == "hi!"
         other.send_json({"type": "ping"})
         assert other.receive_json()["type"] == "pong"  # nothing else was queued for it
+
+
+def test_access_card_round_trip(db: Database) -> None:
+    import tests.test_loop as tl
+
+    perms = tl.FakePerms({"screen": "ask_user"})
+
+    class Api(FakePermissions):
+        async def request_all(self, ids=None) -> dict:
+            perms.states["screen"] = "granted"
+            return {"holder": "Terminal", "items": []}
+
+    async def mac_capture(tool: str, args: dict):
+        return {"image_path": "/tmp/x.png", "text": "Captured"}
+
+    llm = FakeLLM([tl.SCREEN_PLAN])
+    agent = Agent(db, llm, ReadRouter([Tier("nimble", reader)]), SpendGuard(db, 100),
+                  sense=no_context, mac_call=mac_capture, browser=None, reveal=None,
+                  permissions=perms)
+    app = create_app(token="secret", agent=agent, llm=llm, permissions=Api())
+    with TestClient(app) as c, c.websocket_connect("/ws?token=secret") as ws:
+        ws.receive_json()
+        ws.send_json({"type": "request", "text": "what's on my screen"})
+        card = drain_until(ws, "permission_needed")[-1]
+        ws.send_json({"type": "access", "task_id": card["task_id"], "grant": True})
+        resp = drain_until(ws, "response")[-1]
+    assert resp["display"] == "card" and resp["paths"] == ["mac"]

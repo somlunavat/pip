@@ -74,6 +74,27 @@ PERMISSIONS: list[Permission] = [
 ]
 BY_ID = {p.id: p for p in PERMISSIONS}
 
+# What each Mac tool needs. Browser tools depend on which browser is running and
+# handle their own errors, so they aren't listed.
+TOOL_NEEDS: dict[str, list[str]] = {
+    "get_context": ["automation:System Events"],
+    "list_calendar_events": ["automation:Calendar"],
+    "create_calendar_event": ["automation:Calendar"],
+    "list_reminders": ["automation:Reminders"],
+    "create_reminder": ["automation:Reminders"],
+    "create_note": ["automation:Notes"],
+    "draft_email": ["automation:Mail"],
+    "now_playing": ["automation:System Events"],
+    "media_control": ["automation:System Events"],
+    "set_dark_mode": ["automation:System Events"],
+    "reveal_in_finder": ["automation:Finder"],
+    "open_file": ["automation:Finder"],
+    "run_shortcut": ["automation:Shortcuts Events"],
+    "get_selected_text": ["accessibility"],
+    "type_text": ["accessibility"],
+    "capture_screen": ["screen"],
+}
+
 
 def holder() -> str:
     """The app macOS will attach these permissions to."""
@@ -138,6 +159,32 @@ def status(pid: str) -> str:
     if perm.kind == "screen":
         return "granted" if screen_recording_allowed() else "denied"
     return _load().get(pid, {}).get("status", "unknown")
+
+
+def needed_for(tools: list[str]) -> list[str]:
+    """Permissions a set of tools needs, in a stable order, skipping uninstalled apps."""
+    installed = {p.id for p in available()}
+    out: list[str] = []
+    for tool in tools:
+        for pid in TOOL_NEEDS.get(tool, []):
+            if pid in installed and pid not in out:
+                out.append(pid)
+    return out
+
+
+def classify(pid: str) -> str:
+    """granted | ask_os (macOS will prompt on first use) | ask_user (Pip must ask)."""
+    current = status(pid)
+    if current == "granted":
+        return "granted"
+    if BY_ID[pid].kind == "automation" and current == "unknown":
+        return "ask_os"
+    return "ask_user"
+
+
+def describe(pid: str) -> dict[str, str]:
+    perm = BY_ID[pid]
+    return {"id": pid, "name": perm.name, "why": perm.why, "kind": perm.kind}
 
 
 def report() -> dict[str, Any]:

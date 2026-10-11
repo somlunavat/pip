@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from orchestrator import mac
+from orchestrator import mac, permissions
 from orchestrator.agent37 import Dispatcher, WorkerClient, WorkerPool, read_prompt, work_prompt
 from orchestrator.config import Settings
 from orchestrator.db import Database
@@ -114,5 +114,6 @@ def build_runtime(settings: Settings) -> Runtime:
                   browser=mac.open_in_browser,
                   open_results=settings.open_results,
                   location=settings.location,
+                  permissions=permissions,
                   worker_capacity=len(workers) * settings.agent37_sessions_per_worker)
     return Runtime(settings, db, llm, nimble, pool, dispatcher, agent, watchers, hub)

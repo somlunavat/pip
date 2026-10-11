@@ -73,3 +73,21 @@ def test_holder_names_the_launching_app(monkeypatch: pytest.MonkeyPatch) -> None
     assert permissions.holder() == "Terminal"
     monkeypatch.setenv("TERM_PROGRAM", "something-else")
     assert permissions.holder() == "the app that started Pip"
+
+
+def test_needed_for_and_classify(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert permissions.needed_for(["capture_screen", "create_calendar_event",
+                                   "list_calendar_events", "open_url"]) == [
+        "screen", "automation:Calendar"]
+    assert permissions.classify("accessibility") == "granted"   # fixture: trusted
+    assert permissions.classify("screen") == "ask_user"          # fixture: not allowed
+    assert permissions.classify("automation:Calendar") == "ask_os"  # never asked
+    permissions._record("automation:Calendar", "denied")
+    assert permissions.classify("automation:Calendar") == "ask_user"
+
+
+def test_every_mapped_permission_exists() -> None:
+    for tool, pids in permissions.TOOL_NEEDS.items():
+        from orchestrator import mac
+        assert tool in mac.TOOLS, tool
+        assert all(p in permissions.BY_ID for p in pids), tool

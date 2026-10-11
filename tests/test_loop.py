@@ -492,3 +492,107 @@ async def test_planner_and_answer_know_where_the_user_is(db: Database) -> None:
         "Find me the cheapest flight to Tokyo in March.", Recorder(), always_approve)
     assert seen["location"] == "New York, NY"
     assert llm.synth_location == "New York, NY"
+
+
+# -- access on demand (#72) ---------------------------------------------------------------
+
+
+class FakePerms:
+    def __init__(self, states: dict[str, str]) -> None:
+        self.states = states  # pid -> granted | ask_os | ask_user
+        self.requested: list[str] = []
+
+    def needed_for(self, tools: list[str]) -> list[str]:
+        table = {"capture_screen": ["screen"], "create_calendar_event": ["automation:Calendar"]}
+        return [p for t in tools for p in table.get(t, [])]
+
+    def classify(self, pid: str) -> str:
+        return self.states[pid]
+
+    def describe(self, pid: str) -> dict[str, str]:
+        names = {"screen": "Screen Recording", "automation:Calendar": "Calendar"}
+        return {"id": pid, "name": names[pid], "why": "x", "kind": "x"}
+
+    async def request(self, pid: str) -> str:
+        self.requested.append(pid)
+        self.states[pid] = "granted"
+        return "granted"
+
+
+SCREEN_PLAN = {"milestones": [{"id": "s", "goal": "look", "kind": "local",
+                               "tool": "capture_screen"}]}
+
+
+async def test_missing_permission_pauses_and_asks(db: Database) -> None:
+    perms = FakePerms({"screen": "ask_user"})
+    ran: list[str] = []
+
+    async def mac_call(tool: str, args: dict[str, Any]):
+        ran.append(tool)
+        return {"image_path": "/tmp/x.png", "text": "Captured"}
+
+    asked: list[tuple[str, list[str]]] = []
+
+    async def access(task_id: str, ids: list[str]) -> bool:
+        asked.append((task_id, ids))
+        perms.states["screen"] = "granted"  # the user allowed it in the macOS prompt
+        return True
+
+    emit = Recorder()
+    out = await make_agent(db, FakeLLM([SCREEN_PLAN]), mac_call=mac_call,
+                           permissions=perms).handle("what's on my screen", emit,
+                                                     always_approve, access=access)
+    card = next(e for e in emit.events if e["type"] == "permission_needed")
+    assert card["items"][0]["name"] == "Screen Recording"
+    assert asked == [(out.task_id, ["screen"])] and ran == ["capture_screen"]
+    assert out.status == "done"
+
+
+async def test_declined_access_runs_nothing(db: Database) -> None:
+    perms = FakePerms({"screen": "ask_user"})
+    ran: list[str] = []
+
+    async def mac_call(tool: str, args: dict[str, Any]):
+        ran.append(tool)
+        return "x"
+
+    async def decline(task_id: str, ids: list[str]) -> bool:
+        return False
+
+    out = await make_agent(db, FakeLLM([SCREEN_PLAN]), mac_call=mac_call,
+                           permissions=perms).handle("look", Recorder(), always_approve,
+                                                     access=decline)
+    assert out.status == "blocked" and ran == []
+    assert "Pip needs Screen Recording" in out.text
+
+
+async def test_screen_recording_still_off_explains_restart(db: Database) -> None:
+    perms = FakePerms({"screen": "ask_user"})
+
+    async def grant_but_macos_needs_restart(task_id: str, ids: list[str]) -> bool:
+        return True  # status stays ask_user until the process restarts
+
+    out = await make_agent(db, FakeLLM([SCREEN_PLAN]), permissions=perms).handle(
+        "look", Recorder(), always_approve, access=grant_but_macos_needs_restart)
+    assert out.status == "blocked" and "restart Pip" in out.text
+
+
+async def test_first_use_of_an_app_waits_for_the_macos_prompt(db: Database) -> None:
+    """Bug in #72: the macOS 'allow control of Calendar' prompt blocks the step, which
+    used to time out after a few seconds. Now Pip triggers it first and says so."""
+    perms = FakePerms({"automation:Calendar": "ask_os"})
+
+    async def mac_call(tool: str, args: dict[str, Any]) -> str:
+        assert perms.requested == ["automation:Calendar"]  # prompt answered before the step
+        return "event added"
+
+    plan = {"milestones": [{"id": "c", "goal": "add", "kind": "local",
+                            "tool": "create_calendar_event",
+                            "args": {"title": "t", "start": "2026-10-12T09:00"}}]}
+    emit = Recorder()
+    out = await make_agent(db, FakeLLM([plan]), mac_call=mac_call, permissions=perms).handle(
+        "add an event", emit, always_approve)
+    assert out.status == "done"
+    assert any("macOS will ask to let Pip use Calendar" in e.get("label", "")
+               for e in emit.events)
+    assert not any(e["type"] == "permission_needed" for e in emit.events)
