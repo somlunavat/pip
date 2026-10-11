@@ -39,11 +39,12 @@ def main() -> None:
         if runtime.pool.workers:
             status = await runtime.pool.check_health()
             logging.info("worker health: %s", status)
+        runtime.watchers.start()
         yield
         await runtime.aclose()
 
     app = create_app(token=settings.token, agent=runtime.agent, llm=runtime.llm,
-                     lifespan=lifespan)
+                     hub=runtime.hub, feedback=runtime.watchers.feedback, lifespan=lifespan)
     logging.info("listening on ws://%s:%s/ws (token in %s)", settings.host, settings.port,
                  TOKEN_FILE)
     uvicorn.run(app, host=settings.host, port=settings.port, log_level="warning")

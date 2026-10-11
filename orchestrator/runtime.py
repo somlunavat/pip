@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from orchestrator import mac
 from orchestrator.agent37 import Dispatcher, WorkerClient, WorkerPool, read_prompt
 from orchestrator.config import Settings
 from orchestrator.db import Database
@@ -13,8 +14,11 @@ from orchestrator.llm.gemini import GeminiClient
 from orchestrator.loop import Agent, Emit
 from orchestrator.models import Milestone, MilestoneResult
 from orchestrator.nimble import NimbleClient
+from orchestrator.preferences import Preferences
 from orchestrator.router import ReadRouter, Tier
 from orchestrator.security import SpendGuard
+from orchestrator.server import Hub
+from orchestrator.watchers import WatcherService
 
 DOING_EVENTS = {"response.tool_call.started"}
 
@@ -28,8 +32,11 @@ class Runtime:
     pool: WorkerPool
     dispatcher: Dispatcher
     agent: Agent
+    watchers: WatcherService
+    hub: Hub
 
     async def aclose(self) -> None:
+        await self.watchers.stop()
         await self.nimble.aclose()
         await self.pool.aclose()
         self.db.close()
@@ -87,5 +94,19 @@ def build_runtime(settings: Settings) -> Runtime:
         tiers.append(Tier("worker", worker_read))
     router = ReadRouter(tiers)
     guard = SpendGuard(db, settings.daily_cap_usd, settings.kill_switch)
-    agent = Agent(db, llm, router, guard, work=work if workers else None)
-    return Runtime(settings, db, llm, nimble, pool, dispatcher, agent)
+    hub = Hub()
+
+    async def alert(change: dict[str, Any]) -> None:
+        """Show in the overlay; fall back to a macOS notification if it is closed."""
+        if hub.clients:
+            await hub.broadcast(change)
+        else:
+            try:
+                await mac.show_notification("pip", change["description"][:200])
+            except mac.MacToolError:
+                pass
+
+    watchers = WatcherService(db, llm, nimble, Preferences(db), alert, guard)
+    agent = Agent(db, llm, router, guard, work=work if workers else None,
+                  watch=watchers.as_milestone)
+    return Runtime(settings, db, llm, nimble, pool, dispatcher, agent, watchers, hub)
