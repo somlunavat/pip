@@ -14,6 +14,7 @@ HTTP status alone, because a failed turn still returns 200.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import json
 import re
@@ -217,7 +218,30 @@ class WorkerClient:
         on_event: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
         reattach_attempts: int = 2,
     ) -> TurnResult:
-        """Send one turn with stream=true and collect it, reattaching on a dropped stream."""
+        """Send one turn with stream=true and collect it, reattaching on a dropped stream.
+
+        If the caller is cancelled (the user pressed Stop), the turn is cancelled on
+        the worker too, so it stops spending.
+        """
+        track: dict[str, str | None] = {"id": None}
+        try:
+            return await self._run_turn(session_id, text, metadata, on_event,
+                                        reattach_attempts, track)
+        except asyncio.CancelledError:
+            if track["id"]:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(asyncio.shield(self.cancel(track["id"])), 5)
+            raise
+
+    async def _run_turn(
+        self,
+        session_id: str,
+        text: str,
+        metadata: dict[str, str] | None,
+        on_event: Callable[[str, dict[str, Any]], Awaitable[None]] | None,
+        reattach_attempts: int,
+        track: dict[str, str | None],
+    ) -> TurnResult:
         body = {"session_id": session_id, "input": text, "stream": True,
                 "metadata": metadata or {}}
         response_id: str | None = None
@@ -233,6 +257,7 @@ class WorkerClient:
                     async for event, payload in iter_sse(resp.aiter_lines()):
                         if event == "response.created":
                             response_id = payload.get("id")
+                            track["id"] = response_id
                         if on_event:
                             await on_event(event, payload)
                         if event == "response.completed":

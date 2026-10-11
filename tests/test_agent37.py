@@ -334,3 +334,31 @@ async def test_download_failure_does_not_fail_the_step(tmp_path) -> None:
     r = await Dispatcher(WorkerPool([worker("w1", handler)]), downloads=tmp_path).run(
         MILESTONE, task_id="t")
     assert r.ok and r.data["files_error"] == "http_500"
+
+
+async def test_stopping_mid_turn_cancels_it_on_the_worker() -> None:
+    import asyncio
+
+    cancelled: list[str] = []
+    created = asyncio.Event()
+
+    async def slow_stream():
+        yield b'event: response.created\ndata: {"id": "resp_7"}\n\n'
+        created.set()
+        await asyncio.sleep(30)
+        yield b""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path.endswith("/cancel"):
+            cancelled.append(req.url.path)
+            return httpx.Response(200, json={"status": "in_progress"})
+        return httpx.Response(200, content=slow_stream())
+
+    pool = WorkerPool([worker("w1", handler)])
+    task = asyncio.create_task(Dispatcher(pool).run(MILESTONE, task_id="t"))
+    await asyncio.wait_for(created.wait(), 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert cancelled == ["/v1/responses/resp_7/cancel"]
+    assert pool.in_flight == {"w1": 0}  # the session slot was released
