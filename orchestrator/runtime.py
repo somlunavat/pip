@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from orchestrator import mac
-from orchestrator.agent37 import Dispatcher, WorkerClient, WorkerPool, read_prompt
+from orchestrator.agent37 import Dispatcher, WorkerClient, WorkerPool, read_prompt, work_prompt
 from orchestrator.config import Settings
 from orchestrator.db import Database
 from orchestrator.llm.base import LLM, Usage
@@ -79,12 +79,13 @@ def build_runtime(settings: Settings) -> Runtime:
         workers, settings.agent37_sessions_per_worker,
         on_change=lambda wid, status, n: db.upsert_worker(wid, status, n),
     )
-    dispatcher = Dispatcher(pool)
+    dispatcher = Dispatcher(pool, queue_wait_s=settings.agent37_queue_wait_s)
 
-    async def work(m: Milestone, task_id: str, emit: Emit) -> MilestoneResult:
+    async def work(m: Milestone, task_id: str, emit: Emit,
+                   upstream: list[MilestoneResult]) -> MilestoneResult:
         on_event, on_dispatch = worker_hooks(db, task_id, m, emit)
-        return await dispatcher.run(m, task_id=task_id, on_event=on_event,
-                                    on_dispatch=on_dispatch)
+        return await dispatcher.run(m, task_id=task_id, prompt=work_prompt(m, upstream),
+                                    on_event=on_event, on_dispatch=on_dispatch)
 
     async def worker_read(m: Milestone) -> MilestoneResult:
         return await dispatcher.run(m, task_id="read-fallback", prompt=read_prompt(m))
@@ -109,5 +110,6 @@ def build_runtime(settings: Settings) -> Runtime:
     watchers = WatcherService(db, llm, nimble, Preferences(db), alert, guard)
     agent = Agent(db, llm, router, guard, work=work if workers else None,
                   watch=watchers.as_milestone,
-                  browser=mac.open_in_browser if settings.open_results else None)
+                  browser=mac.open_in_browser if settings.open_results else None,
+                  worker_capacity=len(workers) * settings.agent37_sessions_per_worker)
     return Runtime(settings, db, llm, nimble, pool, dispatcher, agent, watchers, hub)

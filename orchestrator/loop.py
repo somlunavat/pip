@@ -26,7 +26,8 @@ Emit = Callable[[dict[str, Any]], Awaitable[None]]
 Approve = Callable[[str, Plan], Awaitable[bool]]
 SenseFn = Callable[[], Awaitable[dict[str, str]]]
 MacCall = Callable[[str, dict[str, Any]], Awaitable[Any]]
-WorkFn = Callable[[Milestone, str, Emit], Awaitable[MilestoneResult]]
+# (milestone, task_id, emit, results of the milestones it depends on)
+WorkFn = Callable[[Milestone, str, Emit, list[MilestoneResult]], Awaitable[MilestoneResult]]
 WatchFn = Callable[[Milestone, str], Awaitable[MilestoneResult]]
 BrowserFn = Callable[[list[str]], Awaitable[str]]
 
@@ -34,6 +35,9 @@ BrowserFn = Callable[[list[str]], Awaitable[str]]
 class PlanError(ValueError):
     pass
 
+
+# Upper bound on worker pieces in one plan; each piece is a paid worker turn.
+MAX_WORK_PIECES = 12
 
 # Errors that a retry cannot fix; retrying only delays the answer.
 PERMANENT_ERRORS = {"no_worker_configured", "no_watcher_registry", "no_tool", "no_worker",
@@ -51,6 +55,10 @@ def check_plan(plan: Plan, *, has_workers: bool) -> list[str]:
     """Problems that would make a plan fail part-way. Checked before the gate so a
     doomed plan never runs its first steps."""
     problems: list[str] = []
+    pieces = sum(1 for m in plan.milestones if m.kind == "work")
+    if pieces > MAX_WORK_PIECES:
+        problems.append(f"plan: {pieces} worker pieces is too many; use at most "
+                        f"{MAX_WORK_PIECES} by grouping related items")
     for m in plan.milestones:
         if m.kind == "local":
             if not m.tool:
@@ -121,6 +129,7 @@ class Agent:
         sense: SenseFn = mac.get_context,
         mac_call: MacCall = mac.call_tool,
         browser: BrowserFn | None = mac.open_in_browser,
+        worker_capacity: int = 0,
         max_replans: int = 1,
     ):
         self.db = db
@@ -132,6 +141,7 @@ class Agent:
         self.sense = sense
         self.mac_call = mac_call
         self.browser = browser  # None turns off pulling results up in the browser
+        self.worker_capacity = worker_capacity if work else 0
         self.max_replans = max_replans
 
     async def handle(self, text: str, emit: Emit, approve: Approve,
@@ -164,6 +174,7 @@ class Agent:
         t0 = time.perf_counter()
         ctx = dict(context if context is not None else await self.sense())
         ctx.setdefault("now", datetime.now().astimezone().isoformat(timespec="minutes"))
+        ctx.setdefault("worker_capacity", str(self.worker_capacity))
         self.db.log_event("sense", task_id=task_id, latency_ms=_ms(t0))
 
         # Fast path for small talk
@@ -257,11 +268,11 @@ class Agent:
             parallel = [m for m in layer if m.kind != "local"]
             local = [m for m in layer if m.kind == "local"]
             outs = list(await asyncio.gather(
-                *(self._run_verified(task_id, m, emit) for m in parallel)
+                *(self._run_verified(task_id, m, emit, results) for m in parallel)
             ))
             # Local steps share the Mac's UI state, so they run one at a time.
             for m in local:
-                outs.append(await self._run_verified(task_id, m, emit))
+                outs.append(await self._run_verified(task_id, m, emit, results))
             for r in outs:
                 results[r.milestone_id] = r
 
@@ -292,22 +303,27 @@ class Agent:
             return [f"plan: {exc}"]
         return check_plan(plan, has_workers=self.work is not None)
 
-    async def _run_verified(self, task_id: str, m: Milestone, emit: Emit) -> MilestoneResult:
+    async def _run_verified(self, task_id: str, m: Milestone, emit: Emit,
+                            done: dict[str, MilestoneResult]) -> MilestoneResult:
         """Run once, verify, retry once on failure."""
-        result = await self._run_one(task_id, m, emit)
+        upstream = [done[d] for d in m.depends_on if d in done]
+        result = await self._run_one(task_id, m, emit, upstream)
         passed, reason = verifier.check(m, result)
         retryable = result.error not in PERMANENT_ERRORS
         if not passed and retryable and m.kind != "read":  # reads already escalated
             await emit({"type": "doing", "task_id": task_id, "milestone_id": m.id,
                         "label": f"Retrying: {m.goal}", "path": result.path})
-            result = await self._run_one(task_id, m, emit)
+            result = await self._run_one(task_id, m, emit, upstream)
             passed, reason = verifier.check(m, result)
         if not passed:
             result.ok = False
             result.error = result.error or reason
+        await emit({"type": "milestone_done", "task_id": task_id, "milestone_id": m.id,
+                    "ok": result.ok, "path": result.path})
         return result
 
-    async def _run_one(self, task_id: str, m: Milestone, emit: Emit) -> MilestoneResult:
+    async def _run_one(self, task_id: str, m: Milestone, emit: Emit,
+                       upstream: list[MilestoneResult]) -> MilestoneResult:
         path = path_for(m)
         sub_id = f"{task_id}:{m.id}"
         await emit({"type": "doing", "task_id": task_id, "milestone_id": m.id,
@@ -329,7 +345,7 @@ class Agent:
                     result = _failed(m, "worker", "no_worker_configured")
                 else:
                     self.guard.check()
-                    result = await self.work(m, task_id, emit)
+                    result = await self.work(m, task_id, emit, upstream)
             elif path == "mac":
                 result = await self._mac(m)
             elif path == "watcher":

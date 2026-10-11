@@ -34,6 +34,7 @@ class Settings:
     agent37_api_url: str = "https://api.agent37.com"
     agent37_workers: list[str] = field(default_factory=list)
     agent37_sessions_per_worker: int = 2
+    agent37_queue_wait_s: float = 900.0
 
     host: str = "127.0.0.1"
     port: int = 8779
@@ -66,6 +67,9 @@ class Settings:
             agent37_workers=_env_list("AGENT37_WORKERS"),
             agent37_sessions_per_worker=int(
                 _env("AGENT37_SESSIONS_PER_WORKER", str(cls.agent37_sessions_per_worker))
+            ),
+            agent37_queue_wait_s=float(
+                _env("AGENT37_QUEUE_WAIT_S", str(cls.agent37_queue_wait_s))
             ),
             host=_env("PIP_HOST", cls.host),
             port=int(_env("PIP_PORT", str(cls.port))),
