@@ -153,7 +153,7 @@ class Agent:
                      *, context: dict[str, str] | None = None) -> TaskOutcome:
         start = time.perf_counter()
         task_id = self.db.create_task(text)
-        await emit({"type": "thinking", "task_id": task_id})
+        await emit({"type": "thinking", "task_id": task_id, "text": text})
         try:
             outcome = await self._run(task_id, text, emit, approve, context, start)
         except asyncio.CancelledError:

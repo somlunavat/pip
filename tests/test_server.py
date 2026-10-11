@@ -145,3 +145,67 @@ def test_stop_cancels_a_running_task(db: Database) -> None:
     assert resp["text"] == "Stopped."
     row = db.one("SELECT status FROM tasks WHERE id = ?", (doing["task_id"],))
     assert row["status"] == "cancelled"
+
+
+# -- background tasks (#61) ---------------------------------------------------------------
+
+
+def background_client(db: Database, llm: FakeLLM, reader_fn=reader) -> TestClient:
+    agent = Agent(db, llm, ReadRouter([Tier("nimble", reader_fn)]), SpendGuard(db, 100),
+                  sense=no_context, mac_call=fake_mac, browser=None, reveal=None)
+    return TestClient(create_app(token="secret", agent=agent, llm=llm))
+
+
+def test_background_task_outlives_its_connection_and_notifies_overlay(db: Database) -> None:
+    import time
+
+    async def slow_reader(m: Milestone) -> MilestoneResult:
+        import asyncio
+        await asyncio.sleep(0.3)
+        return await reader(m)
+
+    llm = FakeLLM([{"summary": "look it up", "milestones": [
+        {"id": "m1", "goal": "search", "kind": "read", "query": "x"}]}])
+    with background_client(db, llm, slow_reader) as c, \
+            c.websocket_connect("/ws?token=secret") as overlay:
+        overlay.receive_json()  # hello
+        with c.websocket_connect("/ws?token=secret") as cli:
+            cli.receive_json()
+            cli.send_json({"type": "request", "text": "find x", "background": True})
+            started = cli.receive_json()
+            assert started["type"] == "thinking" and started["text"] == "find x"
+        # The CLI is gone; the overlay still hears how it went.
+        seen = drain_until(overlay, "response")
+        time.sleep(0.05)
+    assert seen[0]["type"] == "thinking" and seen[0]["background"] is True
+    assert seen[-1]["background"] is True and seen[-1]["task_id"] == started["task_id"]
+    row = db.one("SELECT status FROM tasks WHERE id = ?", (started["task_id"],))
+    assert row["status"] == "done"
+
+
+def test_any_client_can_approve_a_background_plan(db: Database) -> None:
+    llm = FakeLLM([{"summary": "add it", "milestones": [
+        {"id": "m1", "goal": "remind", "kind": "local", "tool": "create_reminder",
+         "args": {"title": "t"}}]}])
+    with background_client(db, llm) as c, c.websocket_connect("/ws?token=secret") as overlay:
+        overlay.receive_json()
+        with c.websocket_connect("/ws?token=secret") as cli:
+            cli.receive_json()
+            cli.send_json({"type": "request", "text": "remind me", "background": True})
+            cli.receive_json()  # thinking
+        plan = drain_until(overlay, "plan")[-1]
+        overlay.send_json({"type": "approve", "task_id": plan["task_id"]})
+        resp = drain_until(overlay, "response")[-1]
+    assert resp["paths"] == ["mac"]
+
+
+def test_foreground_task_is_not_broadcast(db: Database) -> None:
+    llm = FakeLLM(small_talk="hi!")
+    with background_client(db, llm) as c, c.websocket_connect("/ws?token=secret") as other:
+        other.receive_json()
+        with c.websocket_connect("/ws?token=secret") as me:
+            me.receive_json()
+            me.send_json({"type": "request", "text": "hello"})
+            assert drain_until(me, "response")[-1]["text"] == "hi!"
+        other.send_json({"type": "ping"})
+        assert other.receive_json()["type"] == "pong"  # nothing else was queued for it
