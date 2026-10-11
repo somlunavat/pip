@@ -9,9 +9,7 @@ way you care about.
 > It reads the web in one API call, works while your laptop sleeps, and learns which
 > changes you care about.
 
-The design is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The structure is
-inspired by [Moonwalk](https://github.com/OactoDev/Moonwalk), but none of its code is
-used here.
+The design is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). 
 
 ## How it works
 
