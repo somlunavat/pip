@@ -13,7 +13,7 @@ import binascii
 import contextlib
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, Protocol
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
@@ -27,6 +27,12 @@ log = logging.getLogger("pip.server")
 MAX_AUDIO_BYTES = 10 * 1024 * 1024
 APPROVAL_TIMEOUT_S = 300
 FeedbackFn = Callable[[str, bool], Awaitable[dict[str, Any]]]
+
+
+class PermissionsApi(Protocol):
+    def report(self) -> dict[str, Any]: ...
+
+    async def request_all(self, ids: list[str] | None = None) -> dict[str, Any]: ...
 
 
 class Hub:
@@ -46,11 +52,13 @@ class Hub:
 class Session:
     """One overlay connection: runs requests concurrently and routes approvals."""
 
-    def __init__(self, ws: WebSocket, agent: Agent, llm: LLM, feedback: FeedbackFn | None):
+    def __init__(self, ws: WebSocket, agent: Agent, llm: LLM, feedback: FeedbackFn | None,
+                 permissions: PermissionsApi | None = None):
         self.ws = ws
         self.agent = agent
         self.llm = llm
         self.feedback = feedback
+        self.permissions = permissions
         self.approvals: dict[str, asyncio.Future[bool]] = {}
         self.tasks: set[asyncio.Task[Any]] = set()
         self._send_lock = asyncio.Lock()
@@ -82,10 +90,28 @@ class Session:
         elif kind == "feedback" and self.feedback:
             result = await self.feedback(str(msg.get("change_id")), bool(msg.get("useful")))
             await self.send({"type": "feedback_ack", **result})
+        elif kind == "permissions" and self.permissions:
+            await self.send({"type": "permissions", **self.permissions.report()})
+        elif kind == "grant" and self.permissions:
+            # Waits on macOS prompts, so it runs alongside other messages.
+            ids = msg.get("ids")
+            task = asyncio.create_task(self._grant(ids if isinstance(ids, list) else None))
+            self.tasks.add(task)
+            task.add_done_callback(self.tasks.discard)
         elif kind == "ping":
             await self.send({"type": "pong"})
         else:
             await self.send({"type": "error", "message": f"unknown message type: {kind}"})
+
+    async def _grant(self, ids: list[str] | None) -> None:
+        assert self.permissions is not None
+        try:
+            result = await self.permissions.request_all([str(i) for i in ids] if ids else None)
+        except Exception as exc:  # report, don't drop the connection
+            log.exception("permission request failed")
+            await self.send({"type": "error", "message": f"Permission setup failed: {exc}"})
+            return
+        await self.send({"type": "permissions", **result})
 
     async def _request(self, msg: dict[str, Any]) -> None:
         try:
@@ -121,6 +147,7 @@ def create_app(
     llm: LLM,
     hub: Hub | None = None,
     feedback: FeedbackFn | None = None,
+    permissions: PermissionsApi | None = None,
     lifespan: Any = None,
 ) -> FastAPI:
     app = FastAPI(title="pip orchestrator", lifespan=lifespan)
@@ -138,7 +165,7 @@ def create_app(
             return
         await ws.accept()
         app.state.hub.clients.add(ws)
-        session = Session(ws, agent, llm, feedback)
+        session = Session(ws, agent, llm, feedback, permissions)
         await session.send({"type": "hello"})
         try:
             while True:

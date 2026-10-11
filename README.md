@@ -63,8 +63,27 @@ cd overlay && npm install && npm start     # Option+Space to type, Cmd+Shift+Spa
 python scripts/ws_client.py "compare prices for a Sony WH-1000XM5"
 ```
 
-On the first run macOS asks for **Microphone** access (the overlay) and **Automation**
-access (for `osascript` to control System Events, Reminders, and Notes). Grant both.
+### Permissions
+
+Pip can do more the more macOS lets it. Grant everything once, approving each macOS
+prompt yourself:
+
+```bash
+python -m orchestrator.permissions          # walks through every prompt
+python -m orchestrator.permissions --check  # shows what's granted
+```
+
+Or type `setup` in the overlay for the same list with a **Grant** button per item.
+
+| Permission | What it unlocks |
+| --- | --- |
+| Accessibility | reading selected text, typing into apps |
+| Screen Recording | "what's on my screen?" |
+| Automation: System Events, Calendar, Reminders, Notes, Mail, Music, Finder, Shortcuts, Chrome/Safari | reading and acting in each app |
+| Microphone (asked by the overlay) | voice requests |
+
+macOS attaches these to the app that launches the orchestrator (Terminal, iTerm, or
+VS Code). If you start Pip from a different app later, grant them again there.
 
 ### Agent37 workers
 

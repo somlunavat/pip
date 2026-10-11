@@ -92,3 +92,33 @@ def test_unknown_message_type(db: Database) -> None:
         ws.receive_json()
         ws.send_json({"type": "rm -rf"})
         assert ws.receive_json()["type"] == "error"
+
+
+class FakePermissions:
+    def __init__(self) -> None:
+        self.granted: list[str] = []
+
+    def report(self) -> dict:
+        return {"holder": "Terminal", "items": [
+            {"id": "screen", "name": "Screen Recording", "why": "see", "status":
+             "granted" if "screen" in self.granted else "denied"}]}
+
+    async def request_all(self, ids=None) -> dict:
+        self.granted.extend(ids or ["screen"])
+        return self.report()
+
+
+def test_permissions_report_and_grant(db: Database) -> None:
+    perms = FakePermissions()
+    llm = FakeLLM()
+    agent = Agent(db, llm, ReadRouter([Tier("nimble", reader)]), SpendGuard(db, 100),
+                  sense=no_context, mac_call=fake_mac, browser=None)
+    app = create_app(token="secret", agent=agent, llm=llm, permissions=perms)
+    with TestClient(app) as c, c.websocket_connect("/ws?token=secret") as ws:
+        ws.receive_json()
+        ws.send_json({"type": "permissions"})
+        first = ws.receive_json()
+        ws.send_json({"type": "grant", "ids": ["screen"]})
+        second = ws.receive_json()
+    assert first["holder"] == "Terminal" and first["items"][0]["status"] == "denied"
+    assert second["items"][0]["status"] == "granted" and perms.granted == ["screen"]
