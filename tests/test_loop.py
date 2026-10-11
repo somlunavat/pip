@@ -5,8 +5,9 @@ from typing import Any
 
 import pytest
 
+from orchestrator import mac
 from orchestrator.db import Database
-from orchestrator.loop import Agent, PlanError, dependency_groups, needs_approval
+from orchestrator.loop import Agent, PlanError, check_plan, dependency_groups, needs_approval
 from orchestrator.models import Milestone, MilestoneResult, Plan, Source
 from orchestrator.router import ReadRouter, Tier
 from orchestrator.security import SpendGuard
@@ -167,11 +168,122 @@ async def test_failed_group_triggers_one_replan(db: Database) -> None:
     assert out.status == "partial"
 
 
-async def test_work_milestone_without_workers_fails_gracefully(db: Database) -> None:
-    llm = FakeLLM([{"milestones": [{"id": "w", "goal": "log in", "kind": "work",
-                                    "needs_login": True}]}])
-    out = await make_agent(db, llm).handle("x", Recorder(), always_approve)
-    assert out.results[0].error == "no_worker_configured"
+async def test_work_without_workers_is_caught_before_anything_runs(db: Database) -> None:
+    llm = FakeLLM([
+        {"milestones": [{"id": "w", "goal": "log in to the portal", "kind": "work",
+                         "needs_login": True}]},
+        {"milestones": [{"id": "w", "goal": "log in to the portal", "kind": "work",
+                         "needs_login": True}]},
+    ])
+    emit = Recorder()
+    out = await make_agent(db, llm).handle("x", emit, always_approve)
+    assert out.status == "unsupported" and "none is configured" in out.text
+    assert "w: needs an Agent37 worker" in llm.plan_calls[1]["problems"]
+    assert emit.types() == ["thinking", "response"]
+
+
+async def test_calendar_request_regression(db: Database) -> None:
+    """Issue #37: the planner sent 'create a calendar event' to a remote worker after
+    opening Calendar locally. The plan is now rejected before the gate and replanned
+    onto the local calendar tool, so nothing runs half way."""
+    calls: list[tuple[str, dict]] = []
+
+    async def mac_call(tool: str, args: dict[str, Any]) -> str:
+        calls.append((tool, args))
+        return "event added"
+
+    bad = {"summary": "calendar", "milestones": [
+        {"id": "m1", "goal": "Open the Calendar application.", "kind": "local",
+         "tool": "open_app", "args": {"name": "Calendar"}},
+        {"id": "m2", "goal": "Create a calendar event at 4:45 PM today titled 'Submit "
+                             "pitch for the hackathon'.", "kind": "work", "depends_on": ["m1"]},
+    ]}
+    good = {"summary": "add the event", "milestones": [
+        {"id": "m1", "goal": "Add the event", "kind": "local", "tool": "create_calendar_event",
+         "args": {"title": "Submit pitch for the hackathon", "start": "2026-10-11T16:45"}},
+    ]}
+    llm = FakeLLM([bad, good])
+    agent = make_agent(db, llm, mac_call=mac_call,
+                       work=lambda m, t, e: None)  # workers exist, still must not be used
+    out = await agent.handle("create an event at 4:45 today", Recorder(), always_approve)
+    assert out.status == "done"
+    assert [c[0] for c in calls] == ["create_calendar_event"]  # Calendar was not opened first
+    assert "workers are remote computers" in llm.plan_calls[1]["problems"]
+    rows = db.all("SELECT status FROM task_events WHERE event = 'plan' AND task_id = ?",
+                  (out.task_id,))
+    assert [r["status"] for r in rows] == ["invalid", "ok"]
+
+
+async def test_unsupported_request_runs_nothing(db: Database) -> None:
+    called = False
+
+    async def mac_call(tool: str, args: dict[str, Any]) -> str:
+        nonlocal called
+        called = True
+        return "ok"
+
+    approvals: list[str] = []
+
+    async def approve(task_id: str, p: Plan) -> bool:
+        approvals.append(task_id)
+        return True
+
+    llm = FakeLLM([{"milestones": [], "unsupported": "I can't send texts yet."}])
+    emit = Recorder()
+    out = await make_agent(db, llm, mac_call=mac_call).handle("text bob hey", emit, approve)
+    assert out.status == "unsupported" and out.text == "I can't send texts yet."
+    assert not called and not approvals and len(llm.plan_calls) == 1
+    assert emit.events[-1]["display"] == "pill"
+
+
+async def test_bad_tool_args_are_replanned(db: Database) -> None:
+    llm = FakeLLM([
+        {"milestones": [{"id": "a", "goal": "remind", "kind": "local",
+                         "tool": "create_reminder", "args": {}}]},
+        {"milestones": [{"id": "a", "goal": "remind", "kind": "local",
+                         "tool": "create_reminder", "args": {"title": "call mom"}}]},
+    ])
+
+    async def mac_call(tool: str, args: dict[str, Any]) -> str:
+        return "ok"
+
+    out = await make_agent(db, llm, mac_call=mac_call).handle("x", Recorder(), always_approve)
+    assert out.status == "done" and len(llm.plan_calls) == 2
+
+
+async def test_permanent_errors_are_not_retried(db: Database) -> None:
+    attempts = 0
+
+    async def mac_call(tool: str, args: dict[str, Any]) -> str:
+        nonlocal attempts
+        attempts += 1
+        raise mac.MacToolError("macOS blocked pip from controlling Calendar")
+
+    llm = FakeLLM([{"milestones": [{"id": "a", "goal": "g", "kind": "local", "tool": "speak",
+                                    "args": {"text": "hi"}}]}])
+    out = await make_agent(db, llm, mac_call=mac_call).handle("x", Recorder(), always_approve)
+    assert attempts == 1 and out.results[0].error == "MacToolError"
+
+
+def test_check_plan_flags_mac_work() -> None:
+    plan = Plan.model_validate({"milestones": [
+        {"id": "m", "goal": "add a reminder to my Reminders", "kind": "work"}]})
+    problems = check_plan(plan, has_workers=True)
+    assert problems and "remote computers" in problems[0]
+
+
+async def test_planner_gets_current_time(db: Database) -> None:
+    seen: dict[str, str] = {}
+    llm = FakeLLM([{"milestones": [read("a")]}])
+    original = llm.plan
+
+    async def spy(text, context, **kw):
+        seen.update(context)
+        return await original(text, context, **kw)
+
+    llm.plan = spy  # type: ignore[method-assign]
+    await make_agent(db, llm).handle("x", Recorder(), always_approve)
+    assert seen["now"][:4].isdigit() and "T" in seen["now"]
 
 
 async def test_budget_block_is_reported(db: Database) -> None:

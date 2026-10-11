@@ -26,7 +26,8 @@ class FakeLLM:
         return Triage(small_talk=bool(self.small_talk), reply=self.small_talk)
 
     async def plan(self, text: str, context: dict[str, str], *, prior=None, failed=None) -> Plan:
-        self.plan_calls.append({"text": text, "prior": prior, "failed": failed})
+        self.plan_calls.append({"text": text, "prior": prior, "failed": failed,
+                                "problems": context.get("plan_problems")})
         return Plan.model_validate(self.plans.pop(0))
 
     async def synthesize(self, text: str, results: list[MilestoneResult]) -> str:
