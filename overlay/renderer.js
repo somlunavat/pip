@@ -31,6 +31,12 @@ const tasks = new Map(); // task_id -> { card, steps, seen:Set, title }
 let pendingCard = null;  // card created before the server assigns a task id
 let pendingTitle = '';
 let currentTaskId = null; // the task the pill is showing; Stop applies to it
+let overlayVisible = false;
+
+// While the overlay is hidden, things worth knowing become Pip popups (top-right).
+function toast(payload) {
+  if (!overlayVisible) window.pip.toast(payload);
+}
 
 // -- Pip -----------------------------------------------------------------------
 
@@ -173,11 +179,17 @@ function startRequest(title) {
   fit();
 }
 
-function taskFor(taskId) {
-  if (tasks.has(taskId)) return tasks.get(taskId);
-  let card = pendingCard;
-  const title = pendingTitle;
-  pendingCard = null;
+// A background task (started from the CLI, Shortcuts, ...) gets its own card and
+// leaves the pill alone until the user opens it from a popup.
+function taskFor(taskId, { background = false, title: givenTitle = '' } = {}) {
+  if (tasks.has(taskId)) {
+    const known = tasks.get(taskId);
+    if (givenTitle && !known.title) known.title = givenTitle;
+    return known;
+  }
+  let card = background ? null : pendingCard;
+  const title = background ? givenTitle : (pendingTitle || givenTitle);
+  if (!background) pendingCard = null;
   if (!card) {
     card = fromTemplate('tpl-result');
     card.classList.add('pending');
@@ -185,10 +197,12 @@ function taskFor(taskId) {
     trimStack();
   }
   const task = { card, steps: 0, seen: new Set(), running: new Map(), finished: 0, title,
-    done: false };
+    done: false, background, planCard: null };
   tasks.set(taskId, task);
-  currentTaskId = taskId;
-  updateStop();
+  if (!background) {
+    currentTaskId = taskId;
+    updateStop();
+  }
   return task;
 }
 
@@ -200,7 +214,7 @@ function chip(text, cls = '') {
 }
 
 function renderResponse(msg) {
-  const task = taskFor(msg.task_id);
+  const task = taskFor(msg.task_id, { background: !!msg.background });
   task.done = true;
   updateStop();
   const { card } = task;
@@ -252,11 +266,17 @@ function renderResponse(msg) {
   card.dataset.copy = [answer.headline, answer.summary,
     ...(answer.rows || []).map((r) => `${r.label}: ${r.value}`)].filter(Boolean).join('\n');
 
-  showTask(task.title || answer.headline,
-    msg.opened ? `Done · ${msg.opened.replace(/^opened /, 'opened ')}` : 'Done');
-  setPip('done', 2500);
-  // Shown as a notification only if the overlay was closed while this ran.
-  window.pip.notify('Pip', answer.headline);
+  if (!task.background) {
+    showTask(task.title || answer.headline, msg.opened ? `Done · ${msg.opened}` : 'Done');
+    setPip('done', 2500);
+  }
+  window.pip.toastRemove(`task:${msg.task_id}`); // e.g. its approval popup
+  toast({
+    id: `task:${msg.task_id}`, kind: 'task', taskId: msg.task_id, state: 'done',
+    title: answer.headline,
+    body: answer.summary || (files.length ? `${files.length} file${files.length > 1 ? 's' : ''} `
+      + 'saved to Downloads/Pip' : task.title),
+  });
 }
 
 stack.addEventListener('click', (e) => {
@@ -277,7 +297,7 @@ stack.addEventListener('click', (e) => {
 });
 
 function renderPlan(msg) {
-  const task = taskFor(msg.task_id);
+  const task = taskFor(msg.task_id, { background: !!msg.background });
   const card = fromTemplate('tpl-plan');
   $('.headline', card).textContent = msg.summary || 'Proceed with these steps?';
   const apps = [...new Set(msg.milestones.map((m) => APPS[m.tool]).filter(Boolean))];
@@ -301,16 +321,28 @@ function renderPlan(msg) {
     if (!act) return;
     send({ type: act, task_id: msg.task_id });
     card.remove();
+    task.planCard = null;
     pendingPlans.delete(msg.task_id);
-    setSubtitle(act === 'approve' ? 'Working…' : 'Cancelled');
-    setPip(act === 'approve' ? 'working' : 'idle');
+    window.pip.toastRemove(`task:${msg.task_id}`);
+    if (!task.background) {
+      setSubtitle(act === 'approve' ? 'Working…' : 'Cancelled');
+      setPip(act === 'approve' ? 'working' : 'idle');
+    }
     fit();
   });
   task.card.before(card);
+  task.planCard = card;
   pendingPlans.add(msg.task_id);
-  setSubtitle('Waiting for your OK');
-  setPip('thinking');
-  window.pip.show();
+  if (!task.background) {
+    setSubtitle('Waiting for your OK');
+    setPip('thinking');
+  }
+  // Stays until handled; clicking it opens the overlay on the plan card.
+  toast({
+    id: `task:${msg.task_id}`, kind: 'plan', taskId: msg.task_id, state: 'thinking',
+    sticky: true, title: 'Pip needs your OK',
+    body: `${msg.summary || task.title || 'A plan'}. ${$('.touches', card).textContent}`,
+  });
 }
 
 // -- permission setup ---------------------------------------------------------------
@@ -399,26 +431,36 @@ function openSetup() {
   send({ type: 'permissions' });
 }
 
+function alertFeedback(card, changeId, useful) {
+  send({ type: 'feedback', change_id: changeId, useful });
+  window.pip.toastRemove(`alert:${changeId}`);
+  const note = document.createElement('div');
+  note.className = 'done-note';
+  note.textContent = useful ? 'Thanks. Pip will show more like this.' : 'Got it. Fewer like this.';
+  $('.buttons', card)?.replaceWith(note);
+  setTimeout(() => { card.remove(); fit(); }, 1600);
+}
+
 function renderAlert(msg) {
   const card = fromTemplate('tpl-alert');
+  card.dataset.changeId = msg.change_id;
   $('.alert-title', card).textContent = `Change on ${hostname(msg.target)}`;
   const score = typeof msg.score === 'number' ? ` Change score ${msg.score.toFixed(2)}.` : '';
   $('.alert-body', card).textContent = `${msg.description}.${score}`.replace('..', '.');
   card.addEventListener('click', (e) => {
     const useful = e.target.closest('[data-useful]')?.dataset.useful;
-    if (useful === undefined) return;
-    send({ type: 'feedback', change_id: msg.change_id, useful: useful === 'true' });
-    const note = document.createElement('div');
-    note.className = 'done-note';
-    note.textContent = useful === 'true' ? 'Thanks. Pip will show more like this.'
-      : 'Got it. Fewer like this.';
-    $('.buttons', card).replaceWith(note);
-    setTimeout(() => { card.remove(); fit(); }, 1600);
+    if (useful !== undefined) alertFeedback(card, msg.change_id, useful === 'true');
   });
   stack.prepend(card);
   trimStack();
   setPip('alert', 3000);
-  window.pip.notify(`Pip: change on ${hostname(msg.target)}`, msg.description);
+  // The popup from the Pip design: answer Useful / Not useful right there.
+  toast({
+    id: `alert:${msg.change_id}`, kind: 'alert', changeId: msg.change_id, state: 'alert',
+    sticky: true, title: $('.alert-title', card).textContent,
+    body: $('.alert-body', card).textContent,
+    actions: [{ label: 'Useful', value: 'true' }, { label: 'Not useful', value: 'false' }],
+  });
 }
 
 // "Step 2 of 3 · Search kayak.com · Nimble", or for work split across workers,
@@ -448,14 +490,19 @@ function handle(msg) {
       pendingTitle = msg.text;
       showTask(msg.text, 'Thinking…');
       break;
-    case 'thinking':
-      if (msg.task_id) taskFor(msg.task_id);
+    case 'thinking': {
+      const task = msg.task_id
+        ? taskFor(msg.task_id, { background: !!msg.background, title: msg.text })
+        : null;
+      if (task?.background) break;
       setPip('thinking');
       if (msg.label) setSubtitle(msg.label);
       break;
+    }
     case 'ack': {
       const task = taskFor(msg.task_id);
       task.steps = msg.steps || 0;
+      if (task.background) break;
       setSubtitle(msg.text);
       setPip('working');
       break;
@@ -466,6 +513,7 @@ function handle(msg) {
         task.seen.add(msg.milestone_id);
         task.running.set(msg.milestone_id, msg.path);
       }
+      if (task.background || currentTaskId !== msg.task_id) break; // only the pill's task
       setSubtitle(progressText(task, msg));
       setPip('working');
       break;
@@ -473,7 +521,7 @@ function handle(msg) {
     case 'milestone_done': {
       const task = taskFor(msg.task_id);
       if (task.running.delete(msg.milestone_id)) task.finished += 1;
-      if (task.running.size) setSubtitle(progressText(task));
+      if (task.running.size && currentTaskId === msg.task_id) setSubtitle(progressText(task));
       break;
     }
     case 'plan':
@@ -486,8 +534,10 @@ function handle(msg) {
       renderAlert(msg);
       break;
     case 'error': {
-      if (msg.task_id) {
-        const task = taskFor(msg.task_id);
+      const task = msg.task_id
+        ? taskFor(msg.task_id, { background: !!msg.background })
+        : null;
+      if (task) {
         task.done = true;
         updateStop();
         task.card.classList.remove('pending');
@@ -496,6 +546,11 @@ function handle(msg) {
         $('.summary', task.card).textContent = msg.message;
         $('.foot', task.card).hidden = true;
       }
+      toast({
+        id: `task:${msg.task_id || Date.now()}`, kind: 'task', taskId: msg.task_id,
+        state: 'alert', title: 'Something went wrong', body: msg.message,
+      });
+      if (task?.background) break;
       setSubtitle(msg.message);
       setPip('alert', 2500);
       break;
@@ -528,13 +583,47 @@ document.addEventListener('keydown', (e) => {
 });
 
 window.pip.onShown(() => {
+  overlayVisible = true;
   if (pill.dataset.mode === 'input' || !busy()) showInput();
   input.select();
   fit();
 });
 
 // Like Siri, the next summon starts fresh; running tasks and plans are kept.
-window.pip.onHidden(resetForNextRequest);
+window.pip.onHidden(() => {
+  overlayVisible = false;
+  resetForNextRequest();
+});
+
+// A popup was clicked: show its task (or alert) at the top, with the pill on it.
+window.pip.onFocusTask((t) => {
+  if (t.kind === 'alert') {
+    const card = stack.querySelector(`.card.alert[data-change-id="${CSS.escape(t.changeId)}"]`);
+    if (card) stack.prepend(card);
+    fit();
+    return;
+  }
+  const task = tasks.get(t.taskId);
+  if (!task) return;
+  task.background = false;
+  currentTaskId = t.taskId;
+  stack.prepend(task.card);
+  if (task.planCard) stack.prepend(task.planCard);
+  const status = pendingPlans.has(t.taskId) ? 'Waiting for your OK'
+    : task.done ? 'Done' : task.steps ? progressText(task) : 'Working…';
+  showTask(task.title || 'Pip', status);
+  setPip(task.done ? 'idle' : pendingPlans.has(t.taskId) ? 'thinking' : 'working');
+  updateStop();
+  fit();
+});
+
+// Useful / Not useful pressed on a popup.
+window.pip.onToastAction((t) => {
+  if (t.kind !== 'alert') return;
+  const card = stack.querySelector(`.card.alert[data-change-id="${CSS.escape(t.changeId)}"]`);
+  if (card) alertFeedback(card, t.changeId, t.value === 'true');
+  else send({ type: 'feedback', change_id: t.changeId, useful: t.value === 'true' });
+});
 
 // -- voice: toggle recording, send audio to Gemini via the orchestrator ------------------------
 
