@@ -10,7 +10,7 @@
 // outside it, which bin/clickwatch reports while the overlay is visible.
 'use strict';
 
-const { app, BrowserWindow, clipboard, globalShortcut, ipcMain, Notification, screen,
+const { app, BrowserWindow, clipboard, globalShortcut, ipcMain, screen,
   session, shell, systemPreferences } = require('electron');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -22,7 +22,9 @@ const PILL_HEIGHT = 120;
 const MAX_HEIGHT = 760;
 
 let win = null;
+let toastWin = null; // notification popups, top-right; never takes focus
 let clickwatch = null;
+const TOAST_WIDTH = 420;
 const CLICKWATCH = path.join(__dirname, 'bin', 'clickwatch');
 
 function readToken() {
@@ -67,6 +69,39 @@ function createWindow() {
     if (isHttp(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
+}
+
+// Popups float top-right like macOS notifications. focusable: false keeps them from
+// stealing focus from whatever you're doing; acceptFirstMouse lets one click land.
+function createToastWindow() {
+  const { workArea } = screen.getPrimaryDisplay();
+  toastWin = new BrowserWindow({
+    width: TOAST_WIDTH,
+    height: 10,
+    x: workArea.x + workArea.width - TOAST_WIDTH - 6,
+    y: workArea.y + 6,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    focusable: false,
+    acceptFirstMouse: true,
+    show: false,
+    hasShadow: false,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      preload: path.join(__dirname, 'toast-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  toastWin.setAlwaysOnTop(true, 'pop-up-menu');
+  toastWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  toastWin.loadFile(path.join(__dirname, 'toast.html'));
+  toastWin.webContents.on('will-navigate', (e) => e.preventDefault());
 }
 
 function isHttp(url) {
@@ -128,6 +163,7 @@ function wireClosing() {
   win.on('show', () => {
     if (!globalShortcut.isRegistered('Escape')) globalShortcut.register('Escape', hide);
     startClickwatch();
+    toastWin?.webContents.send('toast:clear'); // the overlay now shows what they said
   });
   win.on('hide', () => {
     if (globalShortcut.isRegistered('Escape')) globalShortcut.unregister('Escape');
@@ -147,6 +183,7 @@ app.whenReady().then(async () => {
   });
 
   createWindow();
+  createToastWindow();
   wireClosing();
 
   globalShortcut.register('Alt+Space', toggle);
@@ -179,14 +216,28 @@ app.whenReady().then(async () => {
       shell.showItemInFolder(resolved);
     }
   });
-  ipcMain.on('overlay:notify', (_e, { title, body }) => {
-    // Alerts surface as a macOS notification when the overlay is hidden.
-    if (!win.isVisible() && Notification.isSupported()) {
-      const n = new Notification({ title: String(title), body: String(body).slice(0, 240) });
-      n.on('click', () => show(true));
-      n.show();
-    }
+  // The overlay decides what deserves a popup (only while it is hidden).
+  ipcMain.on('overlay:toast', (_e, toast) => {
+    if (win.isVisible()) return;
+    toastWin.webContents.send('toast:add', toast);
   });
+  ipcMain.on('overlay:toast-remove', (_e, id) => toastWin.webContents.send('toast:remove', id));
+  ipcMain.on('toast:resize', (_e, height) => {
+    const h = Math.round(Number(height) || 0);
+    if (h <= 0) {
+      toastWin.hide();
+      return;
+    }
+    toastWin.setSize(TOAST_WIDTH, Math.min(h, 760));
+    if (!toastWin.isVisible()) toastWin.showInactive();
+  });
+  // Clicking a popup brings up the overlay on that task.
+  ipcMain.on('toast:open', (_e, toast) => {
+    show(true);
+    win.webContents.send('overlay:focus-task', toast);
+  });
+  // Buttons on a popup (Useful / Not useful) answer without opening the overlay.
+  ipcMain.on('toast:action', (_e, toast) => win.webContents.send('overlay:toast-action', toast));
 });
 
 app.on('will-quit', () => {
