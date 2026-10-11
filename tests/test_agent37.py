@@ -362,3 +362,80 @@ async def test_stopping_mid_turn_cancels_it_on_the_worker() -> None:
         await task
     assert cancelled == ["/v1/responses/resp_7/cancel"]
     assert pool.in_flight == {"w1": 0}  # the session slot was released
+
+
+# -- worker setup (#59) ------------------------------------------------------------------
+
+
+async def test_budget_calls_match_the_docs() -> None:
+    calls: list[tuple[str, str, dict | None]] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        body = json.loads(req.content) if req.content else None
+        calls.append((req.method, req.url.path, body))
+        if req.url.path == "/v1/instances":
+            return httpx.Response(200, json={"data": [{"id": "qw5", "name": "pip"}]})
+        return httpx.Response(200, json={"monthly_cap_micros": 0})
+
+    control = Agent37Control("sk_test", transport=httpx.MockTransport(handler))
+    assert [i["id"] for i in await control.list_instances()] == ["qw5"]
+    await control.set_monthly_cap("qw5", 10)
+    await control.top_up("qw5", 3, idempotency_key="k1")
+    assert calls[1] == ("PATCH", "/v1/instances/qw5/budget", {"monthly_cap_micros": 10_000_000})
+    assert calls[2] == ("POST", "/v1/instances/qw5/budget/top-up",
+                        {"amount_micros": 3_000_000, "idempotency_key": "k1"})
+
+
+async def test_create_workers_explains_the_instance_limit(capsys) -> None:
+    import argparse
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "create_workers", Path(__file__).parents[1] / "scripts" / "create_workers.py")
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST":
+            return httpx.Response(402, json={"error": {
+                "code": "instance_limit_reached",
+                "message": "Your plan is limited to one instance at a time."}})
+        return httpx.Response(200, json={"data": [
+            {"id": "qw5durb752", "name": "pip", "status": "running",
+             "template": "agent37-hermes"}]})
+
+    control = Agent37Control("sk_test", transport=httpx.MockTransport(handler))
+    args = argparse.Namespace(count=2, credit=3.0, cap=10.0, user="u")
+    assert await script.create(control, args) == []
+    out = capsys.readouterr().out
+    assert "one instance at a time" in out
+    assert "--adopt qw5durb752 --credit 3.0 --cap 10.0" in out
+
+
+async def test_adopt_leaves_a_working_budget_alone(capsys) -> None:
+    import argparse
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "create_workers", Path(__file__).parents[1] / "scripts" / "create_workers.py")
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+    writes: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method != "GET":
+            writes.append(f"{req.method} {req.url.path}")
+        if req.url.path.endswith("/budget"):
+            return httpx.Response(200, json={
+                "monthly_cap_micros": 5_000_000, "monthly_remaining_micros": 5_000_000,
+                "credit_remaining_micros": 0, "monthly_consumed_micros": 0})
+        return httpx.Response(200, json={"id": "qw5", "name": "pip", "status": "running",
+                                         "template": "agent37-hermes", "budget": None})
+
+    control = Agent37Control("sk_test", transport=httpx.MockTransport(handler))
+    args = argparse.Namespace(adopt="qw5", credit=3.0, cap=10.0)
+    assert await script.adopt(control, args) == ["qw5"]
+    assert writes == []  # $5 cap with $5 left: no cap change, no top-up
+    assert "nothing changed" in capsys.readouterr().out
