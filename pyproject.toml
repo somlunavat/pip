@@ -25,6 +25,7 @@ dev = [
 
 [project.scripts]
 pip-agent = "orchestrator.__main__:main"
+pip-ask = "orchestrator.ask:main"
 
 [build-system]
 requires = ["hatchling"]

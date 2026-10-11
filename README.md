@@ -61,6 +61,10 @@ cd overlay && npm install && npm start     # Option+Space to type, Cmd+Shift+Spa
 
 # Fallback client, no Electron needed
 python scripts/ws_client.py "compare prices for a Sony WH-1000XM5"
+
+# Hand Pip a task without the overlay; it keeps running and the overlay notifies you
+python -m orchestrator.ask "find a cheap flight to Austin next Friday"
+python -m orchestrator.ask --wait "what's on my calendar today"   # print the answer here
 ```
 
 ### Permissions
