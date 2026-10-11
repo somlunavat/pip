@@ -96,6 +96,10 @@ python scripts/create_workers.py --count 2 --credit 3 --cap 10
 Workers are created always-on (`auto_sleep: false`), with an explicit budget, and with
 the Perflo and Composio managed plugins turned off.
 
+With workers configured, Pip splits big jobs ("compare these 6 companies and make me a
+spreadsheet") into pieces that run on workers at the same time, then merges them. Any
+files a worker makes are downloaded to `~/Downloads/Pip/<task>/` and shown in Finder.
+
 ### Benchmark
 
 ```bash

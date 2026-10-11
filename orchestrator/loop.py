@@ -12,6 +12,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from orchestrator import mac, verifier
@@ -30,6 +31,7 @@ MacCall = Callable[[str, dict[str, Any]], Awaitable[Any]]
 WorkFn = Callable[[Milestone, str, Emit, list[MilestoneResult]], Awaitable[MilestoneResult]]
 WatchFn = Callable[[Milestone, str], Awaitable[MilestoneResult]]
 BrowserFn = Callable[[list[str]], Awaitable[str]]
+RevealFn = Callable[[str], Awaitable[str]]
 
 
 class PlanError(ValueError):
@@ -130,6 +132,7 @@ class Agent:
         mac_call: MacCall = mac.call_tool,
         browser: BrowserFn | None = mac.open_in_browser,
         worker_capacity: int = 0,
+        reveal: RevealFn | None = mac.reveal_in_finder,
         max_replans: int = 1,
     ):
         self.db = db
@@ -142,6 +145,7 @@ class Agent:
         self.mac_call = mac_call
         self.browser = browser  # None turns off pulling results up in the browser
         self.worker_capacity = worker_capacity if work else 0
+        self.reveal = reveal  # shows files that workers made; None turns it off
         self.max_replans = max_replans
 
     async def handle(self, text: str, emit: Emit, approve: Approve,
@@ -230,14 +234,33 @@ class Agent:
         answer = clean_answer(await self.llm.synthesize(text, results), results)
         self.db.log_event("aggregate", task_id=task_id, latency_ms=_ms(t0))
         opened = await self._open_results(task_id, answer, results, emit)
+        files = [f for r in results for f in r.data.get("files", [])]
+        if files:
+            await self._reveal_files(task_id, results, emit)
         sources = list({s.url: s.model_dump() for r in results if r.ok for s in r.sources}.values())
         paths = sorted({r.path for r in results})
         await emit({"type": "response", "task_id": task_id, "text": answer.to_markdown(),
                     "answer": answer.model_dump(), "opened": opened, "display": "card",
+                    "files": files, "folder": _common_folder(results),
                     "sources": sources, "elapsed_ms": _ms(start), "paths": paths,
                     "tiers": {r.milestone_id: r.tier for r in results if r.path != "mac"}})
         status = "done" if all(r.ok for r in results) else "partial"
         return TaskOutcome(task_id, status, answer.headline, results, answer=answer)
+
+    async def _reveal_files(self, task_id: str, results: list[MilestoneResult],
+                            emit: Emit) -> None:
+        """Pull up what the workers made: the task's folder in Finder."""
+        folder = _common_folder(results)
+        if not self.reveal or not folder:
+            return
+        await emit({"type": "doing", "task_id": task_id, "label": "Showing the files",
+                    "path": "mac"})
+        try:
+            await self.reveal(folder)
+            self.db.log_event("files.reveal", task_id=task_id, path="mac")
+        except mac.MacToolError as exc:
+            self.db.log_event("files.reveal", task_id=task_id, path="mac", status="failed",
+                              error_code=str(exc)[:120])
 
     async def _open_results(self, task_id: str, answer: Answer,
                             results: list[MilestoneResult], emit: Emit) -> str | None:
@@ -384,6 +407,15 @@ class Agent:
             text = value if isinstance(value, str) else str(value)
         return MilestoneResult(milestone_id=m.id, ok=True, path="mac", text=text,
                                data=data, latency_ms=_ms(t0))
+
+
+def _common_folder(results: list[MilestoneResult]) -> str | None:
+    """The task's download folder (the parent of each milestone's folder)."""
+    folders = {r.data["folder"] for r in results if r.data.get("folder")}
+    if not folders:
+        return None
+    parents = {str(Path(f).parent) for f in folders}
+    return parents.pop() if len(parents) == 1 else sorted(folders)[0]
 
 
 def _card(m: Milestone) -> dict[str, Any]:

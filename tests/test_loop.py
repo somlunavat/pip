@@ -47,6 +47,7 @@ def make_agent(db: Database, llm: FakeLLM, reader=None, **kw: Any) -> Agent:
 
     router = ReadRouter([Tier("nimble", reader or default_reader)])
     kw.setdefault("browser", None)
+    kw.setdefault("reveal", None)
     return Agent(db, llm, router, SpendGuard(db, daily_cap_usd=100), sense=no_context, **kw)
 
 
@@ -426,3 +427,27 @@ async def test_screenshot_result_carries_image_path(db: Database) -> None:
     result = llm.synth_inputs[0][0]
     assert out.status == "done" and result.data["image_path"] == "/tmp/screen.png"
     assert result.text == "Captured the screen."
+
+
+async def test_worker_files_are_revealed_and_reported(db: Database, tmp_path) -> None:
+    revealed: list[str] = []
+
+    async def reveal(path: str) -> str:
+        revealed.append(path)
+        return "revealed"
+
+    folder = tmp_path / "task_x"
+
+    async def work(m, task_id, emit, upstream):
+        return MilestoneResult(milestone_id=m.id, ok=True, path="worker", text="done",
+                               data={"files": [str(folder / m.id / "out.csv")],
+                                     "folder": str(folder / m.id)})
+
+    llm = FakeLLM([{"milestones": [
+        {"id": "a", "goal": "build part a", "kind": "work", "writes_file": True},
+        {"id": "b", "goal": "build part b", "kind": "work", "writes_file": True}]}])
+    emit = Recorder()
+    await make_agent(db, llm, work=work, reveal=reveal, worker_capacity=2).handle(
+        "make two files", emit, always_approve)
+    assert revealed == [str(folder)]
+    assert len(emit.events[-1]["files"]) == 2 and emit.events[-1]["folder"] == str(folder)

@@ -79,7 +79,8 @@ def build_runtime(settings: Settings) -> Runtime:
         workers, settings.agent37_sessions_per_worker,
         on_change=lambda wid, status, n: db.upsert_worker(wid, status, n),
     )
-    dispatcher = Dispatcher(pool, queue_wait_s=settings.agent37_queue_wait_s)
+    dispatcher = Dispatcher(pool, queue_wait_s=settings.agent37_queue_wait_s,
+                            downloads=settings.downloads)
 
     async def work(m: Milestone, task_id: str, emit: Emit,
                    upstream: list[MilestoneResult]) -> MilestoneResult:

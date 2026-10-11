@@ -234,3 +234,103 @@ async def test_pieces_beyond_capacity_queue_instead_of_failing() -> None:
     pieces = [MILESTONE.model_copy(update={"id": f"p{i}"}) for i in range(3)]
     results = await asyncio.gather(*(d.run(m, task_id="t") for m in pieces))
     assert all(r.ok for r in results) and pool.in_flight == {"w1": 0}
+
+
+# -- worker files (#47) -----------------------------------------------------------------
+
+import io  # noqa: E402
+import tarfile  # noqa: E402
+
+from orchestrator.agent37 import extract_archive  # noqa: E402
+
+
+def make_tar(entries: list[tuple[str, bytes | None, str]]) -> bytes:
+    """entries: (name, content, kind) with kind 'file' or 'symlink' (content = target)."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for name, content, kind in entries:
+            info = tarfile.TarInfo(name)
+            if kind == "symlink":
+                info.type = tarfile.SYMTYPE
+                info.linkname = content.decode()
+                tar.addfile(info)
+            else:
+                info.size = len(content)
+                tar.addfile(info, io.BytesIO(content))
+    return buf.getvalue()
+
+
+def test_extract_archive_keeps_regular_files(tmp_path) -> None:
+    data = make_tar([("report.md", b"# EVs", "file"), ("data/table.csv", b"a,b", "file")])
+    files = extract_archive(data, tmp_path / "out")
+    assert sorted(f.relative_to(tmp_path / "out").as_posix() for f in files) == [
+        "data/table.csv", "report.md"]
+    assert (tmp_path / "out" / "report.md").read_bytes() == b"# EVs"
+
+
+@pytest.mark.parametrize("name", ["../escape.txt", "a/../../escape.txt"])
+def test_extract_archive_blocks_path_traversal(tmp_path, name: str) -> None:
+    with pytest.raises(tarfile.TarError):
+        extract_archive(make_tar([(name, b"x", "file")]), tmp_path / "out")
+    assert not (tmp_path / "escape.txt").exists()
+
+
+def test_extract_archive_keeps_absolute_paths_inside_dest(tmp_path) -> None:
+    files = extract_archive(make_tar([("/etc/evil", b"x", "file")]), tmp_path / "out")
+    assert files == [tmp_path / "out" / "etc" / "evil"]  # leading "/" stripped, not escaped
+
+
+def test_extract_archive_skips_links(tmp_path) -> None:
+    data = make_tar([("ok.txt", b"ok", "file"), ("link", b"/etc/passwd", "symlink")])
+    files = extract_archive(data, tmp_path / "out")
+    assert [f.name for f in files] == ["ok.txt"]
+    assert not (tmp_path / "out" / "link").exists()
+
+
+def test_extract_archive_caps(tmp_path) -> None:
+    many = make_tar([(f"f{i}.txt", b"x", "file") for i in range(5)])
+    with pytest.raises(ValueError, match="too many"):
+        extract_archive(many, tmp_path / "a", max_files=4)
+    with pytest.raises(ValueError, match="too large"):
+        extract_archive(make_tar([("big", b"x" * 100, "file")]), tmp_path / "b", max_bytes=10)
+
+
+async def test_worker_files_come_back_to_the_mac(tmp_path) -> None:
+    prompts: list[str] = []
+    archive = make_tar([("comparison.csv", b"maker,deliveries\nRivian,50k", "file")])
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/v1/responses":
+            prompts.append(json.loads(req.content)["input"])
+            return httpx.Response(200, content=completed("Built comparison.csv"))
+        assert req.url.path == "/v1/files/archive"
+        assert req.url.params["path"] == "/home/node/outputs/task_1/m1"
+        return httpx.Response(200, content=archive)
+
+    d = Dispatcher(WorkerPool([worker("w1", handler)]), downloads=tmp_path)
+    r = await d.run(MILESTONE.model_copy(update={"id": "m1"}), task_id="task_1")
+    assert "Save every file you create in /home/node/outputs/task_1/m1/" in prompts[0]
+    assert r.ok and r.data["folder"] == str(tmp_path / "task_1" / "m1")
+    assert (tmp_path / "task_1" / "m1" / "comparison.csv").read_text().startswith("maker")
+
+
+async def test_no_output_folder_means_no_files(tmp_path) -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/v1/responses":
+            return httpx.Response(200, content=completed())
+        return httpx.Response(404, json={"error": {"code": "not_found"}})
+
+    r = await Dispatcher(WorkerPool([worker("w1", handler)]), downloads=tmp_path).run(
+        MILESTONE, task_id="t")
+    assert r.ok and "files" not in r.data and "files_error" not in r.data
+
+
+async def test_download_failure_does_not_fail_the_step(tmp_path) -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/v1/responses":
+            return httpx.Response(200, content=completed())
+        return httpx.Response(500, text="boom")
+
+    r = await Dispatcher(WorkerPool([worker("w1", handler)]), downloads=tmp_path).run(
+        MILESTONE, task_id="t")
+    assert r.ok and r.data["files_error"] == "http_500"
