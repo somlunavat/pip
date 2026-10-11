@@ -30,8 +30,14 @@ used here.
 | --- | --- | --- |
 | `read` | Nimble search/extract → escalates to a worker's headless browser if the result is empty, thin, or blocked | in parallel |
 | `work` | Agent37 Hermes worker session (login, forms, files, code, or over ~60 s) | in parallel |
-| `local` | One allowlisted AppleScript tool; side effects need **Proceed** in the overlay | one at a time |
+| `local` | One allowlisted AppleScript tool; writing into your apps (reminders, notes, calendar events) needs **Proceed** | one at a time |
 | `watch` | Registers a watcher that diffs structured fields and embeds the change | in parallel |
+
+**Results go to your browser.** Pip answers with a one-line headline in the overlay and
+pulls the pages you'd act on (the best results, or a prefilled search such as Google
+Flights) up as tabs in a new window of the browser you're using. Only URLs from the
+answer's own sources or well-known search sites are opened. Set `PIP_OPEN_RESULTS=0` to
+keep answers in the overlay.
 
 **Change embeddings.** Watchers embed *what changed* ("rent 2,400 to 2,200 (down, 8%)"),
 not the page. Each alert is scored against a preference vector that your Useful / Not
@@ -94,6 +100,7 @@ All settings come from the environment (see [`.env.example`](.env.example)).
 | `AGENT37_SESSIONS_PER_WORKER` | `2` | In-flight cap per worker (to be measured) |
 | `PIP_DAILY_CAP_USD` | `10` | Orchestrator-wide daily spend cap |
 | `PIP_KILL_SWITCH` | `0` | `1` stops all paid dispatching |
+| `PIP_OPEN_RESULTS` | `1` | Open results as browser tabs after each answer |
 
 ## Security model
 
@@ -103,8 +110,12 @@ All settings come from the environment (see [`.env.example`](.env.example)).
 - Web pages, worker output, the clipboard, and selected text are all treated as
   untrusted: they are fenced as data before reaching Gemini and never placed in a
   system prompt.
-- On the Mac the agent gets seven allowlisted AppleScript tools and no shell.
-  Arguments are passed through argv, never spliced into script source.
+- On the Mac the agent gets a small allowlist of AppleScript tools and no shell.
+  Arguments are passed through argv, never spliced into script source. Tools that
+  write data need approval; tools that only show something (open a page or app, a
+  notification) don't.
+- Plans are validated before anything runs: work that would need the Mac is never
+  sent to a remote worker, and requests nothing can do get a straight "can't do that".
 - Spending is capped at three layers: a per-worker Agent37 budget, a global daily
   cap, and a kill switch.
 

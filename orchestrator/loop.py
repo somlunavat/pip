@@ -15,9 +15,10 @@ from datetime import datetime
 from typing import Any
 
 from orchestrator import mac, verifier
+from orchestrator.answer import clean_answer
 from orchestrator.db import Database
 from orchestrator.llm.base import LLM
-from orchestrator.models import Milestone, MilestoneResult, Plan
+from orchestrator.models import Answer, Milestone, MilestoneResult, Plan
 from orchestrator.router import ReadRouter, path_for
 from orchestrator.security import BudgetExceeded, SpendGuard
 
@@ -27,6 +28,7 @@ SenseFn = Callable[[], Awaitable[dict[str, str]]]
 MacCall = Callable[[str, dict[str, Any]], Awaitable[Any]]
 WorkFn = Callable[[Milestone, str, Emit], Awaitable[MilestoneResult]]
 WatchFn = Callable[[Milestone, str], Awaitable[MilestoneResult]]
+BrowserFn = Callable[[list[str]], Awaitable[str]]
 
 
 class PlanError(ValueError):
@@ -91,8 +93,9 @@ def dependency_groups(plan: Plan) -> list[list[Milestone]]:
 
 
 def needs_approval(plan: Plan) -> bool:
-    """Read-only plans run at once; anything that changes the Mac waits for Proceed."""
-    return any(m.kind == "local" and m.tool in mac.SIDE_EFFECT_TOOLS for m in plan.milestones)
+    """Plans that write into the user's apps wait for Proceed. Reading, and showing
+    things (opening a page, an app, a notification), run at once."""
+    return any(m.kind == "local" and m.tool in mac.WRITE_TOOLS for m in plan.milestones)
 
 
 @dataclass
@@ -102,6 +105,7 @@ class TaskOutcome:
     text: str
     results: list[MilestoneResult] = field(default_factory=list)
     elapsed_ms: float = 0.0
+    answer: Answer | None = None
 
 
 class Agent:
@@ -116,6 +120,7 @@ class Agent:
         watch: WatchFn | None = None,
         sense: SenseFn = mac.get_context,
         mac_call: MacCall = mac.call_tool,
+        browser: BrowserFn | None = mac.open_in_browser,
         max_replans: int = 1,
     ):
         self.db = db
@@ -126,6 +131,7 @@ class Agent:
         self.watch = watch
         self.sense = sense
         self.mac_call = mac_call
+        self.browser = browser  # None turns off pulling results up in the browser
         self.max_replans = max_replans
 
     async def handle(self, text: str, emit: Emit, approve: Approve,
@@ -207,18 +213,39 @@ class Agent:
         # Act + Verify
         results = await self._act(task_id, text, ctx, layers, emit)
 
-        # Aggregate
+        # Aggregate, then pull the results up where the user can act on them
         self.guard.check()
         t0 = time.perf_counter()
-        answer = await self.llm.synthesize(text, results)
+        answer = clean_answer(await self.llm.synthesize(text, results), results)
         self.db.log_event("aggregate", task_id=task_id, latency_ms=_ms(t0))
+        opened = await self._open_results(task_id, answer, results, emit)
         sources = list({s.url: s.model_dump() for r in results if r.ok for s in r.sources}.values())
         paths = sorted({r.path for r in results})
-        await emit({"type": "response", "task_id": task_id, "text": answer, "display": "card",
+        await emit({"type": "response", "task_id": task_id, "text": answer.to_markdown(),
+                    "answer": answer.model_dump(), "opened": opened, "display": "card",
                     "sources": sources, "elapsed_ms": _ms(start), "paths": paths,
                     "tiers": {r.milestone_id: r.tier for r in results if r.path != "mac"}})
         status = "done" if all(r.ok for r in results) else "partial"
-        return TaskOutcome(task_id, status, answer, results)
+        return TaskOutcome(task_id, status, answer.headline, results, answer=answer)
+
+    async def _open_results(self, task_id: str, answer: Answer,
+                            results: list[MilestoneResult], emit: Emit) -> str | None:
+        """Open the answer's URLs as browser tabs, unless the plan already opened pages."""
+        already = any(r.path == "mac" and r.ok and r.data.get("tool") in mac.DISPLAY_TOOLS
+                      for r in results)
+        if not self.browser or not answer.open_urls or already:
+            return None
+        await emit({"type": "doing", "task_id": task_id, "label": "Opening results",
+                    "path": "mac"})
+        t0 = time.perf_counter()
+        try:
+            opened = await self.browser(answer.open_urls)
+        except mac.MacToolError as exc:
+            self.db.log_event("browser.open", task_id=task_id, path="mac", status="failed",
+                              error_code=str(exc)[:120])
+            return None
+        self.db.log_event("browser.open", task_id=task_id, path="mac", latency_ms=_ms(t0))
+        return opened
 
     async def _act(self, task_id: str, text: str, ctx: dict[str, str],
                    layers: list[list[Milestone]], emit: Emit) -> list[MilestoneResult]:
@@ -335,7 +362,7 @@ class Agent:
         value = await self.mac_call(m.tool, m.args)
         text = value if isinstance(value, str) else str(value)
         return MilestoneResult(milestone_id=m.id, ok=True, path="mac", text=text,
-                               data={"value": value}, latency_ms=_ms(t0))
+                               data={"value": value, "tool": m.tool}, latency_ms=_ms(t0))
 
 
 def _card(m: Milestone) -> dict[str, Any]:

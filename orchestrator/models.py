@@ -70,3 +70,28 @@ class MilestoneResult(BaseModel):
     latency_ms: float = 0.0
     cost_usd: float | None = None
     tier: int = 0
+
+
+class AnswerRow(BaseModel):
+    label: str
+    value: str = ""
+    url: str | None = None
+
+
+class Answer(BaseModel):
+    """What the overlay shows, and what to pull up in the browser."""
+
+    headline: str
+    summary: str = ""
+    rows: list[AnswerRow] = Field(default_factory=list)
+    open_urls: list[str] = Field(default_factory=list)
+
+    def to_markdown(self) -> str:
+        """Plain-text rendering for the terminal client and logs."""
+        lines = [f"**{self.headline}**"]
+        if self.summary:
+            lines.append(self.summary)
+        for row in self.rows:
+            label = f"[{row.label}]({row.url})" if row.url else row.label
+            lines.append(f"- {label}: {row.value}" if row.value else f"- {label}")
+        return "\n".join(lines)

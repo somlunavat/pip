@@ -49,6 +49,8 @@ async def run(prompts: list[str], token: str) -> None:
                     print(f"\n{msg['text']}")
                     for s in msg.get("sources", []):
                         print(f"  - {s['url']}")
+                    if msg.get("opened"):
+                        print(f"  ↗ {msg['opened']}")
                     if "elapsed_ms" in msg:
                         print(f"  ({msg['elapsed_ms'] / 1000:.1f}s via "
                               f"{', '.join(msg.get('paths', []))})")

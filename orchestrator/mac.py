@@ -20,9 +20,12 @@ from typing import Any
 
 DEFAULT_TIMEOUT_S = 3.0
 
-# Tools that change something on the Mac; plans containing them need approval.
-SIDE_EFFECT_TOOLS = {"open_app", "open_url", "create_reminder", "create_note",
-                     "create_calendar_event", "show_notification", "speak"}
+# Tools that write data into the user's apps; plans containing them need Proceed.
+WRITE_TOOLS = {"create_reminder", "create_note", "create_calendar_event"}
+# Tools that only show something and are undone by closing a window; no approval,
+# so results can be pulled up without an extra click.
+DISPLAY_TOOLS = {"open_app", "open_url", "open_in_browser", "show_notification", "speak"}
+SIDE_EFFECT_TOOLS = WRITE_TOOLS | DISPLAY_TOOLS
 READ_ONLY_TOOLS = {"get_context"}
 
 
@@ -139,6 +142,81 @@ async def open_url(url: str) -> str:
     return f"opened {url}"
 
 
+_RUNNING_BROWSER = """
+tell application "System Events"
+    repeat with b in {"Google Chrome", "Arc", "Brave Browser", "Microsoft Edge", "Safari"}
+        if exists (process (b as text)) then return b as text
+    end repeat
+end tell
+return ""
+"""
+
+_CHROMIUM_TABS = """
+on run argv
+    set appName to item 1 of argv
+    using terms from application "Google Chrome"
+        tell application appName
+            set w to make new window
+            set URL of active tab of w to item 2 of argv
+            repeat with i from 3 to count of argv
+                tell w to make new tab with properties {URL:(item i of argv)}
+            end repeat
+            set active tab index of w to 1
+            activate
+        end tell
+    end using terms from
+end run
+"""
+
+_SAFARI_TABS = """
+on run argv
+    tell application "Safari"
+        make new document with properties {URL:(item 1 of argv)}
+        repeat with i from 2 to count of argv
+            tell front window to make new tab with properties {URL:(item i of argv)}
+        end repeat
+        set current tab of front window to first tab of front window
+        activate
+    end tell
+end run
+"""
+
+_OPEN_LOCATIONS = """
+on run argv
+    repeat with u in argv
+        open location (u as text)
+    end repeat
+end run
+"""
+
+
+def _http_urls(urls: str | list[str]) -> list[str]:
+    items = urls.split() if isinstance(urls, str) else list(urls)
+    clean = [u.strip() for u in items if u.strip()]
+    bad = [u for u in clean if not u.startswith(("https://", "http://"))]
+    if bad or not clean:
+        raise MacToolError("only http(s) URLs may be opened")
+    return clean[:5]
+
+
+async def open_in_browser(urls: str | list[str]) -> str:
+    """Open URLs as tabs in a new window of the browser the user is running.
+
+    Chrome-family browsers and Safari get one new window with the first URL active;
+    anything else falls back to the default browser.
+    """
+    links = _http_urls(urls)
+    browser = await _safe(run_osascript(_RUNNING_BROWSER))
+    if browser in ("Google Chrome", "Brave Browser", "Microsoft Edge"):
+        await run_osascript(_CHROMIUM_TABS, browser, *links, timeout=8)
+    elif browser == "Safari":
+        await run_osascript(_SAFARI_TABS, *links, timeout=8)
+    else:
+        await run_osascript(_OPEN_LOCATIONS, *links, timeout=8)
+        browser = "your default browser"
+    return f"opened {len(links)} tab{'s' if len(links) != 1 else ''} in {browser}"
+
+
 async def create_reminder(title: str, notes: str = "") -> str:
     await run_osascript(
         """on run argv
@@ -249,6 +327,8 @@ TOOLS: dict[str, MacTool] = {
         MacTool("get_context", get_context, (), "Read active app, window, browser URL, clipboard"),
         MacTool("open_app", open_app, ("name",), "Bring an application to the front"),
         MacTool("open_url", open_url, ("url",), "Open an http(s) URL in the default browser"),
+        MacTool("open_in_browser", open_in_browser, ("urls",),
+                "Open up to 5 space-separated http(s) URLs as tabs in a new browser window"),
         MacTool("create_reminder", create_reminder, ("title", "notes"), "Add a Reminders item"),
         MacTool("create_note", create_note, ("title", "body"), "Create a note in Notes"),
         MacTool("create_calendar_event", create_calendar_event,

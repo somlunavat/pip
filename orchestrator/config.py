@@ -41,6 +41,7 @@ class Settings:
     db_path: Path = Path("data/pip.db")
     daily_cap_usd: float = 10.0
     kill_switch: bool = False
+    open_results: bool = True
 
     def missing(self) -> list[str]:
         """Required keys that are not set (workers are optional)."""
@@ -72,4 +73,5 @@ class Settings:
             db_path=Path(_env("PIP_DB_PATH", str(cls.db_path))),
             daily_cap_usd=float(_env("PIP_DAILY_CAP_USD", str(cls.daily_cap_usd))),
             kill_switch=_env("PIP_KILL_SWITCH", "0") == "1",
+            open_results=_env("PIP_OPEN_RESULTS", "1") != "0",
         )

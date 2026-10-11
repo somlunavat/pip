@@ -55,6 +55,32 @@ async def test_get_context_parses_front_app(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_side_effect_tools_cover_everything_but_reads() -> None:
     assert mac.SIDE_EFFECT_TOOLS | mac.READ_ONLY_TOOLS == set(mac.TOOLS)
+    assert not mac.WRITE_TOOLS & mac.DISPLAY_TOOLS
+
+
+@pytest.mark.parametrize(("running", "expect"), [
+    ("Google Chrome", "make new window"), ("Safari", "make new document"),
+    ("", "open location"), ("Arc", "open location"),
+])
+async def test_open_in_browser_uses_the_running_browser(
+    monkeypatch: pytest.MonkeyPatch, running: str, expect: str
+) -> None:
+    scripts: list[tuple[str, tuple[str, ...]]] = []
+
+    async def fake(script: str, *args: str, timeout: float = 3.0) -> str:
+        scripts.append((script, args))
+        return running if "exists (process" in script else ""
+
+    monkeypatch.setattr(mac, "run_osascript", fake)
+    out = await mac.open_in_browser(["https://a.example", "https://b.example"])
+    script, args = scripts[-1]
+    assert expect in script and "https://b.example" in args
+    assert out.startswith("opened 2 tabs")
+
+
+async def test_open_in_browser_rejects_non_http() -> None:
+    with pytest.raises(mac.MacToolError, match="http"):
+        await mac.open_in_browser(["file:///etc/passwd"])
 
 
 async def test_calendar_event_passes_numeric_date_parts(monkeypatch: pytest.MonkeyPatch) -> None:
