@@ -42,3 +42,5 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "ASYNC"]
+# Per-call subprocess timeouts are intentional for osascript.
+ignore = ["ASYNC109"]
