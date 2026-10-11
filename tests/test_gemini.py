@@ -89,3 +89,15 @@ async def test_embed_returns_float32_of_dim() -> None:
     client, _, _ = make([])
     vec = await client.embed("rent 2400 to 2200")
     assert vec.dtype == np.float32 and vec.shape == (8,)
+
+
+async def test_plan_prompt_has_time_problems_and_worker_rule() -> None:
+    client, models, _ = make([json.dumps({"milestones": [], "unsupported": "no texting"})])
+    plan = await client.plan("text bob", {"now": "2026-10-11T12:30-05:00",
+                                          "plan_problems": "m2: workers are remote"})
+    assert plan.unsupported == "no texting" and plan.milestones == []
+    prompt = models.calls[0]["contents"]
+    system = models.calls[0]["config"].system_instruction
+    assert "now: 2026-10-11T12:30-05:00" in prompt and "m2: workers are remote" in prompt
+    assert "CANNOT see or control the user's Mac" in system
+    assert "create_calendar_event" in system

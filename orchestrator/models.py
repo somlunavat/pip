@@ -45,8 +45,10 @@ class Milestone(BaseModel):
 
 
 class Plan(BaseModel):
-    milestones: list[Milestone]
+    milestones: list[Milestone] = Field(default_factory=list)
     summary: str = ""
+    # Set instead of milestones when no allowlisted tool or path can do the request.
+    unsupported: str | None = None
 
     def by_id(self) -> dict[str, Milestone]:
         return {m.id: m for m in self.milestones}
