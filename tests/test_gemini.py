@@ -105,3 +105,15 @@ async def test_plan_prompt_has_time_problems_and_worker_rule() -> None:
     assert "now: 2026-10-11T12:30-05:00" in prompt and "m2: workers are remote" in prompt
     assert "CANNOT see or control the user's Mac" in system
     assert "create_calendar_event" in system
+
+
+async def test_synthesize_attaches_screenshots(tmp_path) -> None:
+    png = tmp_path / "screen.png"
+    png.write_bytes(b"\x89PNG fake")
+    client, models, _ = make([json.dumps({"headline": "You have Slack open"})])
+    r = MilestoneResult(milestone_id="s", ok=True, path="mac", text="Captured the screen.",
+                        data={"image_path": str(png)})
+    await client.synthesize("what's on my screen", [r])
+    contents = models.calls[0]["contents"]
+    assert isinstance(contents, list) and len(contents) == 2
+    assert "untrusted" in contents[0]
