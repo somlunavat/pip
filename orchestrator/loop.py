@@ -18,6 +18,7 @@ from typing import Any
 
 from orchestrator import mac, verifier
 from orchestrator.answer import clean_answer, should_open
+from orchestrator.config import describe_location
 from orchestrator.db import Database
 from orchestrator.llm.base import LLM
 from orchestrator.models import Answer, Milestone, MilestoneResult, Plan
@@ -135,6 +136,7 @@ class Agent:
         worker_capacity: int = 0,
         reveal: RevealFn | None = mac.reveal_in_finder,
         open_results: str = "ask",
+        location: str = "",
         max_replans: int = 1,
     ):
         self.db = db
@@ -147,6 +149,7 @@ class Agent:
         self.mac_call = mac_call
         self.browser = browser  # None turns off pulling results up in the browser
         self.open_results = open_results  # ask: only when the request asks for pages
+        self.location = location  # described to the planner; see config.describe_location
         self.worker_capacity = worker_capacity if work else 0
         self.reveal = reveal  # shows files that workers made; None turns it off
         self.max_replans = max_replans
@@ -192,6 +195,7 @@ class Agent:
         t0 = time.perf_counter()
         ctx = dict(context if context is not None else await self.sense())
         ctx.setdefault("now", datetime.now().astimezone().isoformat(timespec="minutes"))
+        ctx.setdefault("location", describe_location(self.location))
         ctx.setdefault("worker_capacity", str(self.worker_capacity))
         self.db.log_event("sense", task_id=task_id, latency_ms=_ms(t0))
 
@@ -245,7 +249,8 @@ class Agent:
         # Aggregate, then pull the results up where the user can act on them
         self.guard.check()
         t0 = time.perf_counter()
-        answer = clean_answer(await self.llm.synthesize(text, results), results)
+        answer = clean_answer(
+            await self.llm.synthesize(text, results, location=ctx.get("location", "")), results)
         self.db.log_event("aggregate", task_id=task_id, latency_ms=_ms(t0))
         opened = None
         if should_open(self.open_results, text):

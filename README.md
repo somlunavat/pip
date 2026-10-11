@@ -135,6 +135,7 @@ All settings come from the environment (see [`.env.example`](.env.example)).
 | `AGENT37_SESSIONS_PER_WORKER` | `2` | In-flight cap per worker (to be measured) |
 | `PIP_DAILY_CAP_USD` | `10` | Orchestrator-wide daily spend cap |
 | `PIP_KILL_SWITCH` | `0` | `1` stops all paid dispatching |
+| `PIP_LOCATION` | — | Where you are ("New York, NY"), for flights, weather, "near me" |
 | `PIP_OPEN_RESULTS` | `1` | Open results as browser tabs after each answer |
 
 ## Security model

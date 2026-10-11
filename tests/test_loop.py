@@ -475,3 +475,20 @@ async def test_research_answers_do_not_open_tabs_unless_asked(db: Database) -> N
     agent.open_results = "always"
     await agent.handle("research the best headphones", Recorder(), always_approve)
     assert len(opened) == 1
+
+
+async def test_planner_and_answer_know_where_the_user_is(db: Database) -> None:
+    """Issue #68: 'cheapest flight to Tokyo' from New York was priced from Honolulu."""
+    seen: dict[str, str] = {}
+    llm = FakeLLM([{"milestones": [read("a")]}])
+    original = llm.plan
+
+    async def spy(text, context, **kw):
+        seen.update(context)
+        return await original(text, context, **kw)
+
+    llm.plan = spy  # type: ignore[method-assign]
+    await make_agent(db, llm, location="New York, NY").handle(
+        "Find me the cheapest flight to Tokyo in March.", Recorder(), always_approve)
+    assert seen["location"] == "New York, NY"
+    assert llm.synth_location == "New York, NY"

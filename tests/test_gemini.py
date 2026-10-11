@@ -117,3 +117,23 @@ async def test_synthesize_attaches_screenshots(tmp_path) -> None:
     contents = models.calls[0]["contents"]
     assert isinstance(contents, list) and len(contents) == 2
     assert "untrusted" in contents[0]
+
+
+async def test_location_reaches_planner_and_answer_rules() -> None:
+    client, models, _ = make([
+        json.dumps({"milestones": [{"id": "m1", "goal": "g", "kind": "read", "query": "q"}]}),
+        json.dumps({"headline": "No New York to Tokyo fares found for March"}),
+    ])
+    await client.plan("cheapest flight to Tokyo in March", {"location": "New York, NY"})
+    plan_prompt = models.calls[0]["contents"]
+    plan_system = models.calls[0]["config"].system_instruction
+    assert "user_location: New York, NY" in plan_prompt
+    assert "Put the place into every search query" in plan_system
+
+    r = MilestoneResult(milestone_id="m1", ok=True, path="nimble",
+                        text="$576 round trip from Honolulu", sources=[Source(url="https://a")])
+    await client.synthesize("cheapest flight to Tokyo", [r], location="New York, NY")
+    synth_prompt = models.calls[1]["contents"]
+    synth_system = models.calls[1]["config"].system_instruction
+    assert synth_prompt.startswith("User location: New York, NY")
+    assert "Never present an option that violates them" in synth_system

@@ -77,6 +77,11 @@ Rules:
 - Prefer few milestones. Independent reads have no depends_on so they run in parallel.
 - Use the Mac context's "now" to resolve relative times like "today at 4:45" or
   "tomorrow morning" into local ISO times (YYYY-MM-DDTHH:MM).
+- Where the user is matters for flights, weather, "near me", stores, delivery, events,
+  and prices. Put the place into every search query: the place the request names, or
+  else user_location (flights: from the user's city and its main airports, e.g.
+  "cheapest round trip flights New York (JFK, EWR, LGA) to Tokyo March 2027"). If
+  user_location is unknown, use the timezone region and say so in the summary.
 - Do not add a separate step to open an app before a tool that already uses it.
 - "What's on my screen", "this window", or "look at this" -> capture_screen.
   "This text" or "what I selected" -> get_selected_text. "My tabs" -> get_browser_tabs.
@@ -119,6 +124,15 @@ Choosing open_urls:
 - Use an empty list when the task was a local action (reminder, note, calendar
   event) or a simple fact that needs no page.
 - If results are missing or contradictory, say so in the headline and summary.
+
+Fit the request:
+- The answer must satisfy what the user asked for: their origin or location, dates,
+  budget, and other constraints. Never present an option that violates them as the
+  answer (e.g. a fare from Honolulu when the user flies from New York).
+- If the results don't contain anything that fits, say that plainly in the headline
+  ("No New York to Tokyo fares found for March") and use the summary to say what
+  to try instead.
+- State any assumption you relied on in the summary, e.g. "From New York (JFK/EWR)."
 """ + UNTRUSTED_RULES
 
 EXTRACT_SYSTEM = """Extract the requested fields from the page as flat JSON.
@@ -227,7 +241,8 @@ class GeminiClient:
         except ValidationError as exc:
             raise GeminiError(f"gemini.plan: invalid plan: {exc.errors()[:3]}") from exc
 
-    async def synthesize(self, text: str, results: list[MilestoneResult]) -> Answer:
+    async def synthesize(self, text: str, results: list[MilestoneResult],
+                         location: str = "") -> Answer:
         blocks = []
         for r in results:
             sources = ", ".join(s.url for s in r.sources)
@@ -237,6 +252,8 @@ class GeminiClient:
                 + fence(body, r.sources[0].url if r.sources else r.path, limit=8000)
             )
         prompt = f"User request:\n{text}\n\nResults:\n" + "\n\n".join(blocks)
+        if location:
+            prompt = f"User location: {location}\n\n" + prompt
         images = _images(results)
         if images:
             prompt += ("\n\nAttached: screenshots of the user's screen from capture_screen. "
@@ -310,6 +327,7 @@ def _format_context(context: dict[str, str]) -> str:
     """App and window are trusted metadata; URL and clipboard are fenced."""
     lines = [
         f"now: {context.get('now', '')}",
+        f"user_location: {context.get('location', 'unknown')}",
         f"worker_capacity: {context.get('worker_capacity', '0')}",
         f"active_app: {context.get('active_app', '')}",
         f"window_title: {context.get('window_title', '')}",

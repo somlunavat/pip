@@ -113,5 +113,6 @@ def build_runtime(settings: Settings) -> Runtime:
                   watch=watchers.as_milestone,
                   browser=mac.open_in_browser,
                   open_results=settings.open_results,
+                  location=settings.location,
                   worker_capacity=len(workers) * settings.agent37_sessions_per_worker)
     return Runtime(settings, db, llm, nimble, pool, dispatcher, agent, watchers, hub)
