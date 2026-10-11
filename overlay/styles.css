@@ -1,0 +1,153 @@
+:root {
+  --glass: rgba(28, 28, 32, 0.78);
+  --glass-strong: rgba(36, 36, 42, 0.92);
+  --stroke: rgba(255, 255, 255, 0.12);
+  --text: #f2f2f5;
+  --muted: #a1a1ab;
+  --accent: #7aa2ff;
+  --ok: #5fd39a;
+  --warn: #ffb454;
+  --radius: 22px;
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  color: var(--text);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+}
+
+#shell { padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+
+/* -- pill ---------------------------------------------------------------- */
+
+.pill {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 56px;
+  padding: 0 12px 0 18px;
+  border-radius: 999px;
+  background: var(--glass);
+  border: 1px solid var(--stroke);
+  backdrop-filter: blur(24px) saturate(1.4);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  -webkit-app-region: drag;
+}
+
+.pill input, .pill button { -webkit-app-region: no-drag; }
+
+.orb {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: background 0.2s;
+}
+
+.pill[data-state="listening"] .orb { background: #ff5f6d; animation: pulse 1s infinite; }
+.pill[data-state="thinking"] .orb { background: var(--accent); animation: pulse 1.4s infinite; }
+.pill[data-state="doing"] .orb { background: var(--ok); animation: spin 1.2s linear infinite;
+  border-radius: 4px; }
+
+@keyframes pulse { 50% { transform: scale(1.35); opacity: 0.6; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+#prompt {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 16px;
+  user-select: text;
+}
+
+#prompt::placeholder { color: var(--muted); }
+
+.status {
+  max-width: 180px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.icon-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--stroke);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.icon-btn.on { color: #ff5f6d; border-color: #ff5f6d; }
+
+/* -- cards ----------------------------------------------------------------- */
+
+.stack { display: flex; flex-direction: column; gap: 8px; }
+
+.card {
+  padding: 14px 18px;
+  border-radius: var(--radius);
+  background: var(--glass-strong);
+  border: 1px solid var(--stroke);
+  backdrop-filter: blur(24px);
+  max-height: 420px;
+  overflow-y: auto;
+  user-select: text;
+  animation: rise 0.18s ease-out;
+}
+
+@keyframes rise { from { transform: translateY(-6px); opacity: 0; } }
+
+.card h3 { margin: 0 0 6px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.card h4 { margin: 10px 0 4px; font-size: 14px; }
+.card p { margin: 4px 0; }
+.card ul, .card ol { margin: 4px 0; padding-left: 20px; }
+.card code { background: rgba(255, 255, 255, 0.08); padding: 1px 4px; border-radius: 4px; }
+.card a { color: var(--accent); text-decoration: none; }
+.card a:hover { text-decoration: underline; }
+
+.card .progress { color: var(--muted); font-size: 12px; }
+.card .progress .line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card.pending .progress::after { content: " …"; }
+
+.card .sources { list-style: none; padding: 0; margin: 8px 0 0; display: flex;
+  flex-wrap: wrap; gap: 6px; }
+.card .sources:empty { display: none; }
+.card .sources li a { display: inline-block; padding: 2px 8px; border-radius: 999px;
+  background: rgba(122, 162, 255, 0.14); font-size: 12px; }
+
+.card .meta { margin-top: 8px; color: var(--muted); font-size: 11px; }
+.card .meta:empty { display: none; }
+
+.card.pill-only .sources, .card.pill-only .meta { display: none; }
+
+.card.plan { border-color: rgba(255, 180, 84, 0.45); }
+.card.alert { border-color: rgba(95, 211, 154, 0.45); }
+.card .target { color: var(--muted); font-size: 12px; }
+
+.actions { display: flex; gap: 8px; margin-top: 10px; color: var(--muted); font-size: 12px; }
+
+.btn {
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--stroke);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+}
+
+.btn:hover { background: rgba(255, 255, 255, 0.12); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #0b1020; }

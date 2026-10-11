@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ws://127.0.0.1:*; media-src 'self' blob:">
+  <title>pip</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main id="shell">
+    <div id="pill" class="pill" data-state="idle">
+      <span class="orb" aria-hidden="true"></span>
+      <input id="prompt" type="text" autocomplete="off" spellcheck="false"
+             placeholder="Ask anything, or say “watch this page”…" aria-label="Request">
+      <span id="status" class="status" aria-live="polite"></span>
+      <button id="mic" class="icon-btn" title="Record (⌘⇧Space)" aria-label="Record">●</button>
+    </div>
+    <section id="stack" class="stack"></section>
+  </main>
+
+  <template id="tpl-card">
+    <article class="card">
+      <div class="progress"></div>
+      <div class="body"></div>
+      <ul class="sources"></ul>
+      <footer class="meta"></footer>
+    </article>
+  </template>
+
+  <template id="tpl-plan">
+    <article class="card plan">
+      <h3>Proceed with these steps?</h3>
+      <p class="summary"></p>
+      <ol class="steps"></ol>
+      <div class="actions">
+        <button class="btn primary" data-act="approve">Proceed</button>
+        <button class="btn" data-act="cancel">Cancel</button>
+      </div>
+    </article>
+  </template>
+
+  <template id="tpl-alert">
+    <article class="card alert">
+      <h3>Change detected</h3>
+      <p class="target"></p>
+      <p class="desc"></p>
+      <div class="actions">
+        <button class="btn" data-useful="true">Useful</button>
+        <button class="btn" data-useful="false">Not useful</button>
+      </div>
+    </article>
+  </template>
+
+  <script src="markdown.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

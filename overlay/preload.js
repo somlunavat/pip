@@ -1,0 +1,14 @@
+// Narrow bridge between the sandboxed renderer and the main process.
+'use strict';
+
+const { contextBridge, ipcRenderer } = require('electron');
+
+contextBridge.exposeInMainWorld('pip', {
+  config: () => ipcRenderer.invoke('overlay:config'),
+  resize: (height) => ipcRenderer.send('overlay:resize', height),
+  hide: () => ipcRenderer.send('overlay:hide'),
+  show: () => ipcRenderer.send('overlay:show'),
+  notify: (title, body) => ipcRenderer.send('overlay:notify', { title, body }),
+  onShown: (fn) => ipcRenderer.on('overlay:shown', () => fn()),
+  onToggleRecord: (fn) => ipcRenderer.on('overlay:toggle-record', () => fn()),
+});
