@@ -45,37 +45,14 @@ function busy() {
   return [...tasks.values()].some((t) => !t.done);
 }
 
-// -- dismissal (Siri-style) ------------------------------------------------------
-// The main process hides the overlay when it loses focus or on Esc. Here: hide a
-// few seconds after an answer (paused while the pointer is over it or while
-// typing), and keep it pinned while a plan awaits approval or a recording runs.
+// -- closing ---------------------------------------------------------------------
+// The overlay never closes by itself. It closes only on a clear user action:
+// Esc, the close button, the hotkey, or a double-click outside it (the main
+// process watches other apps; double-clicks on our own empty margin are below).
 
-const HIDE_AFTER = { opened: 4500, brief: 5000, card: 9000, error: 6000, alert: 8000 };
-let hideTimer = null;
-let hovering = false;
 const pendingPlans = new Set();
-let recording = false;
-
-function updatePin() {
-  window.pip.pin(pendingPlans.size > 0 || recording);
-}
-
-function cancelHide() {
-  clearTimeout(hideTimer);
-  hideTimer = null;
-}
-
-function scheduleHide(ms) {
-  cancelHide();
-  hideTimer = setTimeout(() => {
-    const typing = document.activeElement === input && input.value.trim();
-    if (hovering || typing || pendingPlans.size || recording) scheduleHide(2500);
-    else window.pip.hide();
-  }, ms);
-}
 
 function resetForNextRequest() {
-  cancelHide();
   if (busy() || pendingPlans.size) return;
   for (const card of [...stack.children]) {
     if (!card.classList.contains('pending')) card.remove();
@@ -106,12 +83,11 @@ function setSubtitle(text) {
 }
 
 const shell = $('#shell');
-shell.addEventListener('mouseenter', () => { hovering = true; });
-shell.addEventListener('mouseleave', () => { hovering = false; });
-// Clicks on the transparent margin around the cards count as clicking away.
-document.addEventListener('mousedown', (e) => {
+// A double-click on the transparent margin around the cards is outside the box.
+document.addEventListener('dblclick', (e) => {
   if (e.target === document.body || e.target === shell || e.target === stack) window.pip.hide();
 });
+$('#close').addEventListener('click', () => window.pip.hide());
 
 pill.addEventListener('mousedown', (e) => {
   if (pill.dataset.mode === 'task' && e.target.closest('.task')) showInput();
@@ -254,15 +230,8 @@ function renderResponse(msg) {
   showTask(task.title || answer.headline,
     msg.opened ? `Done · ${msg.opened.replace(/^opened /, 'opened ')}` : 'Done');
   setPip('done', 2500);
-  // Shown as a notification only if the overlay was dismissed while this ran.
+  // Shown as a notification only if the overlay was closed while this ran.
   window.pip.notify('Pip', answer.headline);
-  if (msg.opened) {
-    // The browser just took focus; don't let that blur hide the answer instantly.
-    window.pip.linger(HIDE_AFTER.opened + 500);
-    scheduleHide(HIDE_AFTER.opened);
-  } else {
-    scheduleHide(brief ? HIDE_AFTER.brief : HIDE_AFTER.card);
-  }
 }
 
 stack.addEventListener('click', (e) => {
@@ -306,15 +275,12 @@ function renderPlan(msg) {
     send({ type: act, task_id: msg.task_id });
     card.remove();
     pendingPlans.delete(msg.task_id);
-    updatePin();
     setSubtitle(act === 'approve' ? 'Working…' : 'Cancelled');
     setPip(act === 'approve' ? 'working' : 'idle');
     fit();
   });
   task.card.before(card);
   pendingPlans.add(msg.task_id);
-  updatePin();
-  cancelHide();
   setSubtitle('Waiting for your OK');
   setPip('thinking');
   window.pip.show();
@@ -340,7 +306,6 @@ function renderAlert(msg) {
   trimStack();
   setPip('alert', 3000);
   window.pip.notify(`Pip: change on ${hostname(msg.target)}`, msg.description);
-  if (!busy() && !hideTimer) scheduleHide(HIDE_AFTER.alert);
 }
 
 // "Step 2 of 3 · Search kayak.com · Nimble", or for work split across workers,
@@ -415,7 +380,6 @@ function handle(msg) {
       }
       setSubtitle(msg.message);
       setPip('alert', 2500);
-      scheduleHide(HIDE_AFTER.error);
       break;
     }
     default:
@@ -427,7 +391,6 @@ function handle(msg) {
 // -- input --------------------------------------------------------------------------------
 
 input.addEventListener('keydown', (e) => {
-  cancelHide();
   if (e.key === 'Enter' && input.value.trim()) {
     const text = input.value.trim();
     if (send({ type: 'request', text })) {
@@ -442,7 +405,6 @@ document.addEventListener('keydown', (e) => {
 });
 
 window.pip.onShown(() => {
-  cancelHide();
   if (pill.dataset.mode === 'input' || !busy()) showInput();
   input.select();
   fit();
@@ -480,8 +442,6 @@ async function toggleRecord() {
   recorder.onstop = async () => {
     stream.getTracks().forEach((t) => t.stop());
     micBtn.classList.remove('on');
-    recording = false;
-    updatePin();
     const blob = new Blob(chunks, { type: recorder.mimeType });
     const buf = new Uint8Array(await blob.arrayBuffer());
     let bin = '';
@@ -494,9 +454,6 @@ async function toggleRecord() {
     setSubtitle('Transcribing…');
   };
   recorder.start();
-  recording = true;
-  updatePin();
-  cancelHide();
   micBtn.classList.add('on');
   showTask('Listening…', 'Press ⌘⇧Space again when you’re done');
   setPip('listening');
