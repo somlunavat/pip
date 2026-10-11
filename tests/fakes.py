@@ -32,8 +32,10 @@ class FakeLLM:
                                 "problems": context.get("plan_problems")})
         return Plan.model_validate(self.plans.pop(0))
 
-    async def synthesize(self, text: str, results: list[MilestoneResult]) -> Answer:
+    async def synthesize(self, text: str, results: list[MilestoneResult],
+                         location: str = "") -> Answer:
         self.synth_inputs.append(results)
+        self.synth_location = location
         return Answer(
             headline="answer: " + " | ".join(f"{r.milestone_id}={r.ok}" for r in results),
             rows=[AnswerRow(label=s.url, value="x", url=s.url) for r in results

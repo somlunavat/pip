@@ -18,6 +18,24 @@ def _env_list(name: str) -> list[str]:
     return [part.strip() for part in _env(name).split(",") if part.strip()]
 
 
+def local_timezone() -> str:
+    """The Mac's IANA timezone (e.g. America/New_York), from /etc/localtime."""
+    try:
+        target = os.readlink("/etc/localtime")
+    except OSError:
+        return ""
+    return target.split("zoneinfo/", 1)[-1] if "zoneinfo/" in target else ""
+
+
+def describe_location(configured: str) -> str:
+    """What the planner is told about where the user is."""
+    if configured:
+        return configured
+    tz = local_timezone()
+    return (f"unknown (the Mac's timezone is {tz}; the user is probably in that region)"
+            if tz else "unknown")
+
+
 def _open_mode(value: str) -> str:
     """PIP_OPEN_RESULTS: ask (default), always, or never. Old values 1/0 map to ask/never."""
     value = value.lower()
@@ -52,6 +70,7 @@ class Settings:
     daily_cap_usd: float = 10.0
     kill_switch: bool = False
     open_results: str = "ask"  # ask | always | never
+    location: str = ""  # where the user is, e.g. "New York, NY"; used for flights, weather...
 
     def missing(self) -> list[str]:
         """Required keys that are not set (workers are optional)."""
@@ -88,4 +107,5 @@ class Settings:
             daily_cap_usd=float(_env("PIP_DAILY_CAP_USD", str(cls.daily_cap_usd))),
             kill_switch=_env("PIP_KILL_SWITCH", "0") == "1",
             open_results=_open_mode(_env("PIP_OPEN_RESULTS", "ask")),
+            location=_env("PIP_LOCATION"),
         )
