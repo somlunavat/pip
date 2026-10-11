@@ -127,6 +127,21 @@ button { font: inherit; color: inherit; }
 }
 .mic svg { width: 18px; height: 18px; fill: var(--muted); }
 .mic.on { background: var(--danger); }
+
+.close {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  opacity: 0.55;
+}
+.close:hover { opacity: 1; background: var(--inset); }
+.close svg { width: 16px; height: 16px; fill: var(--muted); }
 .mic.on svg { fill: #fff; }
 
 /* -- Cards ----------------------------------------------------------------------- */

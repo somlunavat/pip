@@ -5,12 +5,14 @@
 //   Cmd+Shift+Space    start/stop a voice recording
 //   Esc                hide (registered only while the overlay is visible)
 //
-// Like Siri, the overlay also goes away when you click anywhere else, and a few
-// seconds after an answer. A pending approval or a recording keeps it open.
+// The overlay never hides by itself (not on focus loss, not on a timer). Besides
+// Esc and the hotkey, it closes on the pill's close button or a double-click
+// outside it, which bin/clickwatch reports while the overlay is visible.
 'use strict';
 
 const { app, BrowserWindow, clipboard, globalShortcut, ipcMain, Notification, screen,
   session, shell, systemPreferences } = require('electron');
+const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -20,8 +22,8 @@ const PILL_HEIGHT = 120;
 const MAX_HEIGHT = 760;
 
 let win = null;
-let pinned = false;    // a plan awaits approval, or a recording is in progress
-let lingerUntil = 0;   // ignore blur until then (results just opened in the browser)
+let clickwatch = null;
+const CLICKWATCH = path.join(__dirname, 'bin', 'clickwatch');
 
 function readToken() {
   if (process.env.PIP_TOKEN) return process.env.PIP_TOKEN.trim();
@@ -86,7 +88,7 @@ function show(focus = true) {
 }
 
 function hide() {
-  if (win && win.isVisible() && !pinned) win.hide();
+  if (win && win.isVisible()) win.hide();
 }
 
 function toggle() {
@@ -94,19 +96,42 @@ function toggle() {
   else show(true);
 }
 
-function wireDismissal() {
-  // Clicking anywhere outside the overlay takes focus away from it: hide, like Siri.
-  win.on('blur', () => {
-    if (Date.now() < lingerUntil) return;
-    hide();
+// Watch for double-clicks in other apps only while the overlay is on screen.
+function startClickwatch() {
+  if (clickwatch || !fs.existsSync(CLICKWATCH)) return;
+  clickwatch = spawn(CLICKWATCH, [], { stdio: ['pipe', 'pipe', 'inherit'] });
+  let buffer = '';
+  clickwatch.stdout.on('data', (chunk) => {
+    buffer += chunk;
+    const lines = buffer.split('\n');
+    buffer = lines.pop();
+    for (const line of lines) {
+      const [kind, x, y] = line.trim().split(' ');
+      if (kind === 'dbl' && !insideWindow(Number(x), Number(y))) hide();
+    }
   });
+  clickwatch.on('exit', () => { clickwatch = null; });
+}
+
+function stopClickwatch() {
+  if (clickwatch) clickwatch.kill();
+  clickwatch = null;
+}
+
+function insideWindow(x, y) {
+  const b = win.getBounds();
+  return x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height;
+}
+
+function wireClosing() {
   // Esc belongs to other apps except while the overlay is on screen.
   win.on('show', () => {
     if (!globalShortcut.isRegistered('Escape')) globalShortcut.register('Escape', hide);
+    startClickwatch();
   });
   win.on('hide', () => {
     if (globalShortcut.isRegistered('Escape')) globalShortcut.unregister('Escape');
-    lingerUntil = 0;
+    stopClickwatch();
     win.webContents.send('overlay:hidden');
   });
 }
@@ -122,7 +147,7 @@ app.whenReady().then(async () => {
   });
 
   createWindow();
-  wireDismissal();
+  wireClosing();
 
   globalShortcut.register('Alt+Space', toggle);
   globalShortcut.register('CommandOrControl+Shift+Space', () => {
@@ -140,10 +165,6 @@ app.whenReady().then(async () => {
     win.setSize(w, h, true);
   });
   ipcMain.on('overlay:hide', () => hide());
-  ipcMain.on('overlay:pin', (_e, value) => { pinned = Boolean(value); });
-  ipcMain.on('overlay:linger', (_e, ms) => {
-    lingerUntil = Date.now() + Math.max(0, Math.min(Number(ms) || 0, 15000));
-  });
   ipcMain.on('overlay:show', () => show(false));
   ipcMain.on('overlay:open-urls', (_e, urls) => {
     for (const url of (Array.isArray(urls) ? urls : []).slice(0, 5)) {
@@ -161,5 +182,8 @@ app.whenReady().then(async () => {
   });
 });
 
-app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+  stopClickwatch();
+});
 app.on('window-all-closed', (e) => e.preventDefault());

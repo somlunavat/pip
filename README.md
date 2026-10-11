@@ -57,7 +57,7 @@ python -m orchestrator                     # ws://127.0.0.1:8779/ws, token in da
 
 # 2. Overlay (new terminal)
 cd overlay && npm install && npm start     # Option+Space to type, Cmd+Shift+Space to talk
-                                           # click anywhere else or press Esc to dismiss
+                                           # close: Esc, the × button, or double-click outside
 
 # Fallback client, no Electron needed
 python scripts/ws_client.py "compare prices for a Sony WH-1000XM5"
