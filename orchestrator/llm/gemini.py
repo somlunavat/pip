@@ -105,7 +105,9 @@ Return JSON:
   "summary": one short sentence of supporting context (may be empty),
   "rows": up to 6 comparison rows when the results compare options:
           [{"label": site or item, "value": price/fact, "url": source URL}],
-  "open_urls": up to 3 URLs to open as browser tabs, best first
+  "open_urls": up to 3 best pages for the user to open, best first (they are opened as
+               tabs only if the user asked to see pages; otherwise they back the
+               card's Open sources button)
 }
 
 Choosing open_urls:

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestrator import mac, verifier
-from orchestrator.answer import clean_answer
+from orchestrator.answer import clean_answer, should_open
 from orchestrator.db import Database
 from orchestrator.llm.base import LLM
 from orchestrator.models import Answer, Milestone, MilestoneResult, Plan
@@ -134,6 +134,7 @@ class Agent:
         browser: BrowserFn | None = mac.open_in_browser,
         worker_capacity: int = 0,
         reveal: RevealFn | None = mac.reveal_in_finder,
+        open_results: str = "ask",
         max_replans: int = 1,
     ):
         self.db = db
@@ -145,6 +146,7 @@ class Agent:
         self.sense = sense
         self.mac_call = mac_call
         self.browser = browser  # None turns off pulling results up in the browser
+        self.open_results = open_results  # ask: only when the request asks for pages
         self.worker_capacity = worker_capacity if work else 0
         self.reveal = reveal  # shows files that workers made; None turns it off
         self.max_replans = max_replans
@@ -245,7 +247,9 @@ class Agent:
         t0 = time.perf_counter()
         answer = clean_answer(await self.llm.synthesize(text, results), results)
         self.db.log_event("aggregate", task_id=task_id, latency_ms=_ms(t0))
-        opened = await self._open_results(task_id, answer, results, emit)
+        opened = None
+        if should_open(self.open_results, text):
+            opened = await self._open_results(task_id, answer, results, emit)
         files = [f for r in results for f in r.data.get("files", [])]
         if files:
             await self._reveal_files(task_id, results, emit)

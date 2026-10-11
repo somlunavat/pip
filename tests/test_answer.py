@@ -39,3 +39,38 @@ def test_markdown_fallback() -> None:
     md = Answer(headline="Cheapest is $742", summary="4 sources",
                 rows=[AnswerRow(label="ana", value="$742", url="https://ana.co.jp")]).to_markdown()
     assert md == "**Cheapest is $742**\n4 sources\n- [ana](https://ana.co.jp): $742"
+
+
+import pytest  # noqa: E402
+
+from orchestrator.answer import should_open, wants_browser  # noqa: E402
+
+
+@pytest.mark.parametrize("request_text", [
+    "open the cheapest flights to Tokyo",
+    "Please pull up apartments near UT",
+    "find hotels in Austin and open them",
+    "compare XM5 prices, then pull up the results",
+    "show me flights in my browser",
+    "open these in new tabs",
+    "take me to the UT registration page",
+])
+def test_requests_that_ask_for_pages(request_text: str) -> None:
+    assert wants_browser(request_text)
+
+
+@pytest.mark.parametrize("request_text", [
+    "research the best noise cancelling headphones under $300",
+    "is the Apple store open on Sunday?",
+    "show me the cheapest flight to Tokyo",
+    "what time does Trader Joe's open",
+    "compare 5 EV makers and build me a spreadsheet",
+    "what's an open-source alternative to Notion",
+])
+def test_requests_that_just_want_an_answer(request_text: str) -> None:
+    assert not wants_browser(request_text)
+
+
+def test_modes() -> None:
+    assert should_open("always", "research x") and not should_open("never", "open x")
+    assert should_open("ask", "open x") and not should_open("ask", "research x")

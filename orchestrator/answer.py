@@ -8,6 +8,7 @@ model built a prefilled search (e.g. Google Flights for "cheapest flight to Toky
 
 from __future__ import annotations
 
+import re
 from urllib.parse import urlsplit
 
 from orchestrator.models import Answer, MilestoneResult
@@ -21,6 +22,30 @@ SEARCH_SITES = {
     "zillow.com", "apartments.com", "yelp.com", "opentable.com", "maps.apple.com",
     "github.com", "news.ycombinator.com", "reddit.com",
 }
+
+
+# The user asked to see pages, not just get an answer. Phrased as commands so that
+# "is the store open on Sunday?" or "show me the cheapest flight" don't open tabs.
+_WANTS_BROWSER = re.compile(
+    r"^\s*(please\s+)?(open|pull up|bring up|take me to|go to|load)\b"
+    r"|\b(and|then|also)\s+(open|pull up|bring up)\b"
+    r"|\b(open|pull up|bring up)\s+(it|them|that|those|these|the\s+(page|pages|site|sites|link"
+    r"|links|result|results|tab|tabs|listings?|options?))\b"
+    r"|\b(in|on)\s+(a\s+|my\s+|the\s+)?(new\s+)?(browser|chrome|safari|tabs?)\b",
+    re.IGNORECASE,
+)
+
+
+def wants_browser(request: str) -> bool:
+    """Whether the request asks for pages to be opened (deterministic, not the model)."""
+    return bool(_WANTS_BROWSER.search(request))
+
+
+def should_open(mode: str, request: str) -> bool:
+    """mode: 'ask' (default) opens only when the request asks; 'always'; 'never'."""
+    if mode == "never":
+        return False
+    return mode == "always" or wants_browser(request)
 
 
 def _site(url: str) -> str | None:

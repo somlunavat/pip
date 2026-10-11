@@ -246,7 +246,9 @@ function renderResponse(msg) {
   card.classList.toggle('brief', brief);
   $('.foot', card).hidden = brief && !sources.length && !files.length;
   $('[data-act="open"]', card).hidden = !sources.length;
-  card.dataset.sources = JSON.stringify(sources);
+  // Open sources opens the pages Pip picked as best, falling back to every source.
+  const best = (answer.open_urls || []).length ? answer.open_urls : sources;
+  card.dataset.sources = JSON.stringify(best);
   card.dataset.copy = [answer.headline, answer.summary,
     ...(answer.rows || []).map((r) => `${r.label}: ${r.value}`)].filter(Boolean).join('\n');
 

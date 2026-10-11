@@ -33,11 +33,12 @@ used here.
 | `local` | One allowlisted AppleScript tool; writing into your apps (reminders, notes, calendar events) needs **Proceed** | one at a time |
 | `watch` | Registers a watcher that diffs structured fields and embeds the change | in parallel |
 
-**Results go to your browser.** Pip answers with a one-line headline in the overlay and
-pulls the pages you'd act on (the best results, or a prefilled search such as Google
-Flights) up as tabs in a new window of the browser you're using. Only URLs from the
-answer's own sources or well-known search sites are opened. Set `PIP_OPEN_RESULTS=0` to
-keep answers in the overlay.
+**Results, and tabs when you want them.** Pip answers with a one-line headline and picks
+the pages you'd act on (the best results, or a prefilled search such as Google Flights).
+It opens them as tabs only when you ask ("open…", "pull up…", "show me in my browser");
+otherwise they're one click away under **Open sources**. `PIP_OPEN_RESULTS=always` or
+`never` overrides that. Only URLs from the answer's own sources or well-known search
+sites are ever opened.
 
 **Change embeddings.** Watchers embed *what changed* ("rent 2,400 to 2,200 (down, 8%)"),
 not the page. Each alert is scored against a preference vector that your Useful / Not

@@ -315,7 +315,8 @@ async def test_results_are_pulled_up_in_the_browser(db: Database) -> None:
                   open_urls=["https://a.example/deal", "https://www.google.com/travel/flights?q=x",
                              "javascript:alert(1)", "https://evil.example/phish"])
     emit = Recorder()
-    out = await make_agent(db, llm, browser=browser).handle("cheap flights", emit, always_approve)
+    out = await make_agent(db, llm, browser=browser).handle(
+        "find cheap flights and pull up the results", emit, always_approve)
     assert opened == [["https://a.example/deal", "https://www.google.com/travel/flights?q=x"]]
     resp = emit.events[-1]
     assert resp["opened"] == "opened 2 tabs in Google Chrome"
@@ -328,7 +329,8 @@ async def test_browser_failure_does_not_fail_the_task(db: Database) -> None:
         raise mac.MacToolError("macOS blocked pip from controlling Google Chrome")
 
     llm = FakeLLM([{"milestones": [read("a")]}], open_urls=["https://a.example/x"])
-    out = await make_agent(db, llm, browser=browser).handle("x", Recorder(), always_approve)
+    out = await make_agent(db, llm, browser=browser).handle("open x", Recorder(),
+                                                            always_approve)
     assert out.status == "done"
     row = db.one("SELECT status FROM task_events WHERE event = 'browser.open'")
     assert row["status"] == "failed"
@@ -451,3 +453,25 @@ async def test_worker_files_are_revealed_and_reported(db: Database, tmp_path) ->
         "make two files", emit, always_approve)
     assert revealed == [str(folder)]
     assert len(emit.events[-1]["files"]) == 2 and emit.events[-1]["folder"] == str(folder)
+
+
+async def test_research_answers_do_not_open_tabs_unless_asked(db: Database) -> None:
+    """Issue #64: a research question ended by opening 3 tabs nobody asked for."""
+    opened: list[list[str]] = []
+
+    async def browser(urls: list[str]) -> str:
+        opened.append(urls)
+        return "opened"
+
+    urls = ["https://a.example/1", "https://a.example/2", "https://a.example/3"]
+    llm = FakeLLM([{"milestones": [read("a")]}, {"milestones": [read("a")]}], open_urls=urls)
+    agent = make_agent(db, llm, browser=browser)
+    emit = Recorder()
+    await agent.handle("research the best noise cancelling headphones under $300", emit,
+                       always_approve)
+    assert opened == [] and emit.events[-1]["opened"] is None
+    assert emit.events[-1]["answer"]["open_urls"] == urls  # still offered on the card
+
+    agent.open_results = "always"
+    await agent.handle("research the best headphones", Recorder(), always_approve)
+    assert len(opened) == 1
