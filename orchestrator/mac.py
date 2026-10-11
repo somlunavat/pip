@@ -2,7 +2,7 @@
 
 Each tool is one `osascript` call with a short timeout. There is deliberately no
 shell tool, no file deletion, and no message sending: the agent runs as you, so
-the surface stays at the seven tools below. Arguments are passed through argv,
+the surface stays at the small allowlist below. Arguments are passed through argv,
 never interpolated into script source, so text from the web cannot inject
 AppleScript.
 """
@@ -10,21 +10,38 @@ AppleScript.
 from __future__ import annotations
 
 import asyncio
+import inspect
+import re
 import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any
 
 DEFAULT_TIMEOUT_S = 3.0
 
 # Tools that change something on the Mac; plans containing them need approval.
-SIDE_EFFECT_TOOLS = {"open_app", "open_url", "create_reminder", "create_note", "show_notification",
-                     "speak"}
+SIDE_EFFECT_TOOLS = {"open_app", "open_url", "create_reminder", "create_note",
+                     "create_calendar_event", "show_notification", "speak"}
 READ_ONLY_TOOLS = {"get_context"}
 
 
 class MacToolError(RuntimeError):
     pass
+
+
+_NOT_AUTHORIZED = re.compile(r"-1743|not authori[sz]ed to send apple events", re.IGNORECASE)
+_TARGET_APP = re.compile(r'application "([^"]+)"')
+
+
+def _explain(err: str, script: str) -> str:
+    """Turn macOS's terse automation denial into something the user can act on."""
+    if _NOT_AUTHORIZED.search(err):
+        app = (_TARGET_APP.search(script) or _TARGET_APP.search(err))
+        target = app.group(1) if app else "that app"
+        return (f"macOS blocked pip from controlling {target}. Allow it in System Settings > "
+                "Privacy & Security > Automation, then try again.")
+    return err
 
 
 async def run_osascript(script: str, *args: str, timeout: float = DEFAULT_TIMEOUT_S) -> str:
@@ -43,7 +60,8 @@ async def run_osascript(script: str, *args: str, timeout: float = DEFAULT_TIMEOU
         await proc.wait()
         raise MacToolError(f"osascript timed out after {timeout}s") from exc
     if proc.returncode != 0:
-        raise MacToolError(err.decode(errors="replace").strip() or "osascript failed")
+        message = err.decode(errors="replace").strip() or "osascript failed"
+        raise MacToolError(_explain(message, script))
     return out.decode(errors="replace").strip()
 
 
@@ -147,6 +165,63 @@ end run""",
     return f"note created: {title}"
 
 
+_CALENDAR_EVENT = """
+on run argv
+    set {y, mo, d, h, mi, durMin, theTitle, theNotes, calName} to argv
+    set startDate to current date
+    set day of startDate to 1
+    set year of startDate to (y as integer)
+    set month of startDate to (mo as integer)
+    set day of startDate to (d as integer)
+    set hours of startDate to (h as integer)
+    set minutes of startDate to (mi as integer)
+    set seconds of startDate to 0
+    set endDate to startDate + ((durMin as integer) * minutes)
+    tell application "Calendar"
+        if calName is "" then
+            set targetCal to first calendar whose writable is true
+        else
+            set targetCal to first calendar whose name is calName
+        end if
+        make new event at end of events of targetCal with properties ¬
+            {summary:theTitle, start date:startDate, end date:endDate, description:theNotes}
+        return name of targetCal
+    end tell
+end run
+"""
+
+
+def parse_local_datetime(value: str) -> datetime:
+    """Accept ISO 8601 ('2026-10-11T16:45', with or without seconds/offset) as local time."""
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise MacToolError(f"start must be ISO 8601 like 2026-10-11T16:45, got {value!r}") from exc
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone().replace(tzinfo=None)  # to the Mac's local time
+    return parsed
+
+
+async def create_calendar_event(title: str, start: str, duration_minutes: str = "60",
+                                notes: str = "", calendar: str = "") -> str:
+    """Add an event to Calendar. Date parts go through argv as numbers, so the
+    result does not depend on the Mac's date format or locale."""
+    when = parse_local_datetime(start)
+    try:
+        minutes = max(1, min(int(float(duration_minutes)), 24 * 60))
+    except ValueError as exc:
+        raise MacToolError("duration_minutes must be a number") from exc
+    cal = await run_osascript(
+        _CALENDAR_EVENT,
+        str(when.year), str(when.month), str(when.day), str(when.hour), str(when.minute),
+        str(minutes), title, notes, calendar,
+        timeout=15,
+    )
+    end = when + timedelta(minutes=minutes)
+    return (f"event '{title}' added to {cal or 'Calendar'}: "
+            f"{when:%a %b %-d, %-I:%M %p} to {end:%-I:%M %p}")
+
+
 async def show_notification(title: str, message: str) -> str:
     await run_osascript(
         "on run argv\n display notification (item 2 of argv) with title (item 1 of argv)\nend run",
@@ -176,6 +251,10 @@ TOOLS: dict[str, MacTool] = {
         MacTool("open_url", open_url, ("url",), "Open an http(s) URL in the default browser"),
         MacTool("create_reminder", create_reminder, ("title", "notes"), "Add a Reminders item"),
         MacTool("create_note", create_note, ("title", "body"), "Create a note in Notes"),
+        MacTool("create_calendar_event", create_calendar_event,
+                ("title", "start", "duration_minutes", "notes", "calendar"),
+                "Add a Calendar event; start is local ISO time like 2026-10-11T16:45, "
+                "duration_minutes defaults to 60, calendar defaults to the first writable one"),
         MacTool("show_notification", show_notification, ("title", "message"),
                 "Show a macOS notification"),
         MacTool("speak", speak, ("text",), "Speak text aloud"),
@@ -183,14 +262,30 @@ TOOLS: dict[str, MacTool] = {
 }
 
 
-async def call_tool(name: str, args: dict[str, Any]) -> Any:
-    """Run one allowlisted tool. Unknown tools and unknown args are refused."""
+def validate_args(name: str, args: dict[str, Any]) -> str | None:
+    """Why a planned call would fail before running it, or None if it looks fine."""
     tool = TOOLS.get(name)
     if tool is None:
-        raise MacToolError(f"tool not allowlisted: {name}")
+        return f"tool not allowlisted: {name}"
     unknown = set(args) - set(tool.params)
     if unknown:
-        raise MacToolError(f"unexpected args for {name}: {sorted(unknown)}")
+        return f"unexpected args for {name}: {sorted(unknown)}"
+    required = [
+        p.name for p in inspect.signature(tool.fn).parameters.values()
+        if p.default is inspect.Parameter.empty
+    ]
+    missing = [p for p in required if not str(args.get(p, "")).strip()]
+    if missing:
+        return f"missing args for {name}: {missing}"
+    return None
+
+
+async def call_tool(name: str, args: dict[str, Any]) -> Any:
+    """Run one allowlisted tool. Unknown tools and bad args are refused."""
+    problem = validate_args(name, args)
+    if problem:
+        raise MacToolError(problem)
+    tool = TOOLS[name]
     clean = {k: str(v) for k, v in args.items()}
     return await tool.fn(**clean)
 
