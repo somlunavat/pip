@@ -158,6 +158,13 @@ All settings come from the environment (see [`.env.example`](.env.example)).
   Arguments are passed through argv, never spliced into script source. Tools that
   write data need approval; tools that only show something (open a page or app, a
   notification) don't.
+- When a task needs access Pip doesn't have yet, it asks then (an access card, or a
+  popup when hidden), and you approve it in the macOS prompt. The first time Pip
+  controls an app, it tells you macOS is about to ask.
+- If no tool fits, Pip can propose a custom AppleScript action for one app. The plan
+  card shows the exact script and nothing runs until you press Proceed; scripts that
+  send, delete, write files, use the shell or network, or touch passwords are refused
+  regardless.
 - Plans are validated before anything runs: work that would need the Mac is never
   sent to a remote worker, and requests nothing can do get a straight "can't do that".
 - Spending is capped at three layers: a per-worker Agent37 budget, a global daily

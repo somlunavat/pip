@@ -161,13 +161,29 @@ def status(pid: str) -> str:
     return _load().get(pid, {}).get("status", "unknown")
 
 
+def app_permission(app: str) -> str:
+    """Automation for any app (used by custom actions); registered on first use."""
+    pid = f"automation:{app}"
+    if pid not in BY_ID:
+        BY_ID[pid] = Permission(pid, app, f"control {app} for a custom action", "automation",
+                                f'tell application "{app}" to get name')
+    return pid
+
+
 def needed_for(tools: list[str]) -> list[str]:
-    """Permissions a set of tools needs, in a stable order, skipping uninstalled apps."""
+    """Permissions a set of tools needs, in a stable order, skipping uninstalled apps.
+
+    A custom action is passed as "custom_applescript:<app>".
+    """
     installed = {p.id for p in available()}
     out: list[str] = []
     for tool in tools:
-        for pid in TOOL_NEEDS.get(tool, []):
-            if pid in installed and pid not in out:
+        if tool.startswith("custom_applescript:"):
+            pids = [app_permission(tool.split(":", 1)[1])]
+        else:
+            pids = [p for p in TOOL_NEEDS.get(tool, []) if p in installed]
+        for pid in pids:
+            if pid not in out:
                 out.append(pid)
     return out
 

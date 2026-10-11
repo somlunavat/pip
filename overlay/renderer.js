@@ -21,6 +21,8 @@ const APPS = {
   run_shortcut: 'Shortcuts', type_text: 'the front app', save_text_file: 'Documents/Pip',
   quit_app: 'an open app',
 };
+// Custom actions name their own app.
+const appFor = (m) => (m.tool === 'custom_applescript' ? m.args?.app : APPS[m.tool]);
 const PIP_STATES = ['idle', 'listening', 'thinking', 'working', 'alert', 'done'];
 
 let ws = null;
@@ -300,7 +302,7 @@ function renderPlan(msg) {
   const task = taskFor(msg.task_id, { background: !!msg.background });
   const card = fromTemplate('tpl-plan');
   $('.headline', card).textContent = msg.summary || 'Proceed with these steps?';
-  const apps = [...new Set(msg.milestones.map((m) => APPS[m.tool]).filter(Boolean))];
+  const apps = [...new Set(msg.milestones.map(appFor).filter(Boolean))];
   $('.touches', card).textContent = apps.length
     ? `Pip wants to do this. It touches ${apps.join(' and ')} only.`
     : 'Pip wants to do this.';
@@ -312,9 +314,16 @@ function renderPlan(msg) {
     goal.textContent = m.goal;
     const kind = document.createElement('span');
     kind.className = 'kind';
-    kind.textContent = m.kind;
+    kind.textContent = m.tool === 'custom_applescript' ? `custom · ${m.args?.app}` : m.kind;
     li.append(goal, kind);
     steps.appendChild(li);
+    if (m.tool === 'custom_applescript') {
+      // A custom action always shows exactly what will run.
+      const code = document.createElement('pre');
+      code.className = 'script';
+      code.textContent = m.args?.script || '';
+      steps.appendChild(code);
+    }
   }
   card.addEventListener('click', (e) => {
     const act = e.target.closest('[data-act]')?.dataset.act;

@@ -25,7 +25,7 @@ DEFAULT_TIMEOUT_S = 3.0
 
 # Tools that write data or act as the user; plans containing them need Proceed.
 WRITE_TOOLS = {"create_reminder", "create_note", "create_calendar_event", "run_shortcut",
-               "type_text", "save_text_file", "quit_app"}
+               "type_text", "save_text_file", "quit_app", "custom_applescript"}
 # Tools that only show or adjust something and are undone by closing a window or
 # flipping it back; drafts are never sent. No approval, so Pip can just do them.
 DISPLAY_TOOLS = {"open_app", "open_url", "open_in_browser", "show_notification", "speak",
@@ -692,6 +692,63 @@ async def quit_app(name: str) -> str:
     return f"quit {name}"
 
 
+# -- Custom actions: a one-off script Pip writes, shown to and approved by the user ----
+
+_APP_NAME = re.compile(r"^[\w .&'+-]{1,60}$")
+_TELL_APP = re.compile(r'\btell\s+application\s+"([^"]+)"', re.IGNORECASE)
+# Whatever the user approves, these never run: they could delete, send, spend,
+# escalate, exfiltrate, or run arbitrary code.
+_FORBIDDEN: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(p, re.IGNORECASE), why) for p, why in [
+        (r"\bdo\s+shell\s+script\b|\bosascript\b", "shell commands"),
+        (r"\badministrator\s+privileges\b|\bsudo\b", "admin privileges"),
+        (r"\bpassword\b|\bkeychain\b|\bcredential", "passwords or the keychain"),
+        (r"\bdelete\b|\berase\b|\bempty\s+(the\s+)?trash\b|\bto\s+(the\s+)?trash\b",
+         "deleting things"),
+        (r"\bsend\b|\breply\b|\bforward\b|\bpost\b", "sending or posting"),
+        (r"\bopen\s+for\s+access\b|\bwrite\b|\bset\s+eof\b", "writing files"),
+        (r"\brestart\b|\bshut\s*down\b|\blog\s*out\b", "restart or shutdown"),
+        (r"\b(run|load|store)\s+script\b", "running other scripts"),
+        (r"\b(do|execute)\s+javascript\b", "running JavaScript in a browser"),
+        (r"\bopen\s+location\b|\bget\s+url\b|https?://", "network access"),
+        (r"\bkeystroke\b|\bkey\s+code\b", "typing keys (use type_text)"),
+        (r"\bpurchase\b|\bbuy\b|\bcheckout\b", "purchases"),
+        (r"«", "raw Apple event codes"),
+    ]
+]
+MAX_SCRIPT_CHARS = 4000
+
+
+def vet_script(app: str, script: str) -> str | None:
+    """Why a proposed script can't run, or None if it passes the static check.
+
+    The script may only tell the one app it names, and none of _FORBIDDEN may appear.
+    This sits in front of the user's approval, not instead of it.
+    """
+    if not _APP_NAME.match(app or ""):
+        return "invalid app name"
+    if len(script) > MAX_SCRIPT_CHARS:
+        return f"script is longer than {MAX_SCRIPT_CHARS} characters"
+    targets = {t.strip().lower() for t in _TELL_APP.findall(script)}
+    if not targets:
+        return f'script must use tell application "{app}"'
+    if targets != {app.strip().lower()}:
+        return f"script may only control {app}"
+    for pattern, why in _FORBIDDEN:
+        if pattern.search(script):
+            return f"scripts can't do {why}"
+    return None
+
+
+async def custom_applescript(app: str, purpose: str, script: str) -> str:
+    """Run a one-off AppleScript the user saw and approved (needs Proceed)."""
+    problem = vet_script(app, script)
+    if problem:
+        raise MacToolError(f"custom action refused: {problem}")
+    out = await run_osascript(script, timeout=30)
+    return out[:4000] if out else f"done: {purpose}"
+
+
 @dataclass(frozen=True)
 class MacTool:
     name: str
@@ -748,6 +805,11 @@ TOOLS: dict[str, MacTool] = {
         MacTool("save_text_file", save_text_file, ("name", "content"),
                 "Save text as a file in ~/Documents/Pip (never overwrites)"),
         MacTool("quit_app", quit_app, ("name",), "Quit an application"),
+        MacTool("custom_applescript", custom_applescript, ("app", "purpose", "script"),
+                "Last resort when no tool above fits: a short AppleScript that controls one "
+                "scriptable app (it may only tell that app). The user sees the script and "
+                "must approve it. It can't send, delete, write files, use the network or "
+                "shell, or touch passwords"),
     )
 }
 
