@@ -36,11 +36,18 @@ class Settings:
     agent37_sessions_per_worker: int = 2
 
     host: str = "127.0.0.1"
-    port: int = 8765
+    port: int = 8779
     token: str = ""
     db_path: Path = Path("data/pip.db")
     daily_cap_usd: float = 10.0
     kill_switch: bool = False
+
+    def missing(self) -> list[str]:
+        """Required keys that are not set (workers are optional)."""
+        required = {"GEMINI_API_KEY": self.gemini_api_key, "NIMBLE_API_KEY": self.nimble_api_key}
+        if self.agent37_workers:
+            required["AGENT37_API_KEY"] = self.agent37_api_key
+        return [name for name, value in required.items() if not value]
 
     @classmethod
     def from_env(cls, env_file: str | None = ".env") -> Settings:
