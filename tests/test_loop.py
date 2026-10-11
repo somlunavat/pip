@@ -46,6 +46,7 @@ def make_agent(db: Database, llm: FakeLLM, reader=None, **kw: Any) -> Agent:
                                sources=[Source(url=f"https://{m.id}.example")])
 
     router = ReadRouter([Tier("nimble", reader or default_reader)])
+    kw.setdefault("browser", None)
     return Agent(db, llm, router, SpendGuard(db, daily_cap_usd=100), sense=no_context, **kw)
 
 
@@ -60,6 +61,13 @@ def test_dependency_groups_rejects_cycles_and_unknown() -> None:
                                                               read("b", ["a"])]}))
     with pytest.raises(PlanError, match="unknown"):
         dependency_groups(Plan.model_validate({"milestones": [read("a", ["zzz"])]}))
+
+
+def test_display_tools_run_without_approval() -> None:
+    for tool in ("open_url", "open_in_browser", "open_app", "speak", "show_notification"):
+        plan = Plan.model_validate({"milestones": [
+            {"id": "m", "goal": "g", "kind": "local", "tool": tool}]})
+        assert not needs_approval(plan), tool
 
 
 def test_needs_approval_only_for_side_effects() -> None:
@@ -141,8 +149,8 @@ async def test_cancelled_plan_does_nothing(db: Database) -> None:
     async def deny(task_id: str, p: Plan) -> bool:
         return False
 
-    plan = {"milestones": [{"id": "a", "goal": "g", "kind": "local", "tool": "speak",
-                            "args": {"text": "hi"}}]}
+    plan = {"milestones": [{"id": "a", "goal": "g", "kind": "local", "tool": "create_note",
+                            "args": {"title": "t", "body": "b"}}]}
     out = await make_agent(db, FakeLLM([plan]), mac_call=mac_call).handle("x", Recorder(), deny)
     assert out.status == "cancelled" and not called
     assert db.one("SELECT status FROM tasks WHERE id = ?", (out.task_id,))["status"] == "cancelled"
@@ -293,3 +301,51 @@ async def test_budget_block_is_reported(db: Database) -> None:
     emit = Recorder()
     out = await agent.handle("x", emit, always_approve)
     assert out.status == "blocked" and "daily cap" in emit.events[-1]["text"]
+
+
+async def test_results_are_pulled_up_in_the_browser(db: Database) -> None:
+    opened: list[list[str]] = []
+
+    async def browser(urls: list[str]) -> str:
+        opened.append(urls)
+        return "opened 2 tabs in Google Chrome"
+
+    llm = FakeLLM([{"milestones": [read("a")]}],
+                  open_urls=["https://a.example/deal", "https://www.google.com/travel/flights?q=x",
+                             "javascript:alert(1)", "https://evil.example/phish"])
+    emit = Recorder()
+    out = await make_agent(db, llm, browser=browser).handle("cheap flights", emit, always_approve)
+    assert opened == [["https://a.example/deal", "https://www.google.com/travel/flights?q=x"]]
+    resp = emit.events[-1]
+    assert resp["opened"] == "opened 2 tabs in Google Chrome"
+    assert resp["answer"]["headline"] == out.text
+    assert any(e.get("label") == "Opening results" for e in emit.events)
+
+
+async def test_browser_failure_does_not_fail_the_task(db: Database) -> None:
+    async def browser(urls: list[str]) -> str:
+        raise mac.MacToolError("macOS blocked pip from controlling Google Chrome")
+
+    llm = FakeLLM([{"milestones": [read("a")]}], open_urls=["https://a.example/x"])
+    out = await make_agent(db, llm, browser=browser).handle("x", Recorder(), always_approve)
+    assert out.status == "done"
+    row = db.one("SELECT status FROM task_events WHERE event = 'browser.open'")
+    assert row["status"] == "failed"
+
+
+async def test_no_double_open_when_plan_already_opened_pages(db: Database) -> None:
+    opened: list[list[str]] = []
+
+    async def browser(urls: list[str]) -> str:
+        opened.append(urls)
+        return "opened"
+
+    async def mac_call(tool: str, args: dict[str, Any]) -> str:
+        return "opened 1 tab"
+
+    llm = FakeLLM([{"milestones": [{"id": "o", "goal": "pull up", "kind": "local",
+                                    "tool": "open_url", "args": {"url": "https://a.example"}}]}],
+                  open_urls=["https://a.example"])
+    await make_agent(db, llm, browser=browser, mac_call=mac_call).handle(
+        "pull up a.example", Recorder(), always_approve)
+    assert opened == []

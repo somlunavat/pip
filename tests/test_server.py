@@ -32,7 +32,7 @@ async def fake_mac(tool: str, args: dict) -> str:
 
 def client(db: Database, llm: FakeLLM) -> TestClient:
     agent = Agent(db, llm, ReadRouter([Tier("nimble", reader)]), SpendGuard(db, 100),
-                  sense=no_context, mac_call=fake_mac)
+                  sense=no_context, mac_call=fake_mac, browser=None)
     return TestClient(create_app(token="secret", agent=agent, llm=llm))
 
 
