@@ -1,0 +1,83 @@
+/* Pip notification popups: the alert card from the Pip design, stacked top-right. */
+
+:root {
+  --surface: rgba(255, 255, 255, 0.96);
+  --inset: #f0eff4;
+  --text: #1c1c1e;
+  --muted: #6e6e73;
+  --shadow: 0 14px 34px rgba(30, 30, 60, 0.2), 0 2px 6px rgba(30, 30, 60, 0.08);
+  font: 14px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  color: var(--text);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; background: transparent; overflow: hidden; user-select: none; }
+
+/* Padding leaves room for shadows inside the transparent window. */
+#toasts { padding: 10px 14px 22px; display: flex; flex-direction: column; gap: 10px; }
+
+.toast {
+  position: relative;
+  padding: 14px 16px 16px;
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  animation: slide 0.22s ease-out;
+}
+.toast.leaving { animation: fade 0.18s ease-in forwards; }
+@keyframes slide { from { transform: translateX(24px); opacity: 0; } }
+@keyframes fade { to { transform: translateX(24px); opacity: 0; } }
+
+header { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
+.app-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: var(--inset);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.app-icon img { width: 28px; height: 28px; }
+.app-name { flex: 1; }
+.dismiss {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--inset);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.dismiss svg { width: 12px; height: 12px; fill: var(--muted); }
+.toast:hover .dismiss { opacity: 1; }
+.toast:hover .when { display: none; }
+
+.title { margin: 10px 0 2px; font-size: 15px; font-weight: 600; }
+.body {
+  margin: 0;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.body:empty { display: none; }
+
+.actions { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 8px; }
+.actions:not(:empty) { margin-top: 12px; }
+.actions button {
+  height: 34px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--inset);
+  color: var(--text);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+.actions button:hover { filter: brightness(0.96); }
