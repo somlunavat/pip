@@ -1,0 +1,17 @@
+{
+  "name": "pip-overlay",
+  "version": "0.1.0",
+  "description": "Always-on-top pill and card overlay for the pip orchestrator",
+  "author": "somlunavat",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "postinstall": "node node_modules/electron/install.js",
+    "start": "electron .",
+    "check": "for f in *.js; do node --check \"$f\" || exit 1; done"
+  },
+  "devDependencies": {
+    "electron": "^44.7.0"
+  }
+}
