@@ -163,7 +163,11 @@ class WorkerClient:
     async def health(self) -> bool:
         try:
             resp = await self._http.get("/v1/health", timeout=10)
-            return resp.status_code == 200 and bool(resp.json().get("healthy"))
+            body = resp.json()
+            # Documented shape: {"ok": true, "agent": "hermes", "healthy": true}
+            return resp.status_code == 200 and bool(body.get("ok", True)) and bool(
+                body.get("healthy")
+            )
         except (httpx.HTTPError, ValueError):
             return False
 
@@ -315,9 +319,12 @@ class Dispatcher:
     - 504 upstream_timeout    -> read the session transcript
     """
 
-    def __init__(self, pool: WorkerPool, *, max_attempts: int = 3):
+    def __init__(self, pool: WorkerPool, *, max_attempts: int = 3,
+                 transcript_wait_s: float = 600, transcript_poll_s: float = 15):
         self.pool = pool
         self.max_attempts = max_attempts
+        self.transcript_wait_s = transcript_wait_s
+        self.transcript_poll_s = transcript_poll_s
 
     async def run(
         self,
@@ -387,18 +394,38 @@ class Dispatcher:
 
     async def _from_transcript(self, worker: WorkerClient, m: Milestone, session_id: str,
                                start: float) -> MilestoneResult:
-        try:
-            transcript = await worker.session(session_id)
-        except httpx.HTTPError:
-            return _fail(m, "upstream_timeout", start)
-        messages = transcript.get("messages") or []
-        text = next((msg.get("content", "") for msg in reversed(messages)
-                     if msg.get("role") == "assistant"), "")
-        if isinstance(text, list):
-            text = "\n".join(str(p.get("text", "")) for p in text if isinstance(p, dict))
+        """After 15 minutes of stream silence (504), read the answer from the session.
+
+        The turn may still be running; poll until `active_response_id` clears.
+        """
+        deadline = time.monotonic() + self.transcript_wait_s
+        while True:
+            try:
+                transcript = await worker.session(session_id)
+            except httpx.HTTPError:
+                return _fail(m, "upstream_timeout", start)
+            if transcript.get("active_response_id") is None or time.monotonic() > deadline:
+                break
+            await asyncio.sleep(self.transcript_poll_s)
+        text = last_assistant_text(transcript)
         return MilestoneResult(milestone_id=m.id, ok=bool(text), path="worker", text=text,
                                sources=_sources(text), latency_ms=_ms(start),
+                               data={"worker_id": worker.instance_id, "session_id": session_id},
                                error=None if text else "upstream_timeout")
+
+
+def last_assistant_text(transcript: dict[str, Any]) -> str:
+    """Final assistant message from GET /v1/sessions/{id} (`history`, per the docs)."""
+    messages = transcript.get("history") or transcript.get("messages") or []
+    for msg in reversed(messages):
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            content = "\n".join(str(p.get("text", "")) for p in content if isinstance(p, dict))
+        if str(content).strip():
+            return str(content)
+    return ""
 
 
 def read_prompt(m: Milestone) -> str:

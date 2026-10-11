@@ -165,3 +165,41 @@ async def test_create_worker_disables_risky_plugins_and_sets_budget() -> None:
     assert body["env"]["AGENT37_MANAGED_PLUGIN_PERFLO_ENABLED"] == "false"
     assert body["env"]["AGENT37_MANAGED_PLUGIN_COMPOSIO_ENABLED"] == "false"
     assert body["metadata"]["role"] == "worker"
+
+
+async def test_health_uses_documented_shape() -> None:
+    def ok(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, "agent": "hermes", "healthy": True})
+
+    def gateway_down(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": False, "agent": "hermes", "healthy": True})
+
+    assert await worker("w1", ok).health()
+    assert not await worker("w2", gateway_down).health()
+
+
+async def test_504_reads_answer_from_session_history_after_turn_finishes() -> None:
+    """Issue #45: the transcript lives in `history`, and the turn may still be running."""
+    polls = {"n": 0}
+    documented = {
+        "id": "s", "agent": "hermes", "active_response_id": None,
+        "history": [
+            {"role": "user", "content": "Research the top 3 EV makers"},
+            {"role": "assistant", "content": "Here is the memo. Source: https://ev.example/a",
+             "thinking": "..."},
+        ],
+    }
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST":
+            return httpx.Response(504, json={"error": {"code": "upstream_timeout"}})
+        polls["n"] += 1
+        if polls["n"] == 1:
+            return httpx.Response(200, json={**documented, "active_response_id": "resp_1",
+                                             "history": documented["history"][:1]})
+        return httpx.Response(200, json=documented)
+
+    d = Dispatcher(WorkerPool([worker("w1", handler)]), transcript_poll_s=0)
+    r = await d.run(MILESTONE, task_id="t")
+    assert r.ok and r.text.startswith("Here is the memo") and polls["n"] == 2
+    assert [s.url for s in r.sources] == ["https://ev.example/a"]
