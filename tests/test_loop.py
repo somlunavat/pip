@@ -413,3 +413,16 @@ async def test_no_workers_means_zero_capacity(db: Database) -> None:
     llm.plan = spy  # type: ignore[method-assign]
     await make_agent(db, llm, worker_capacity=8).handle("x", Recorder(), always_approve)
     assert seen["worker_capacity"] == "0"
+
+
+async def test_screenshot_result_carries_image_path(db: Database) -> None:
+    async def mac_call(tool: str, args: dict[str, Any]):
+        return {"image_path": "/tmp/screen.png", "text": "Captured the screen."}
+
+    llm = FakeLLM([{"milestones": [{"id": "s", "goal": "look", "kind": "local",
+                                    "tool": "capture_screen"}]}])
+    out = await make_agent(db, llm, mac_call=mac_call).handle(
+        "what's on my screen", Recorder(), always_approve)
+    result = llm.synth_inputs[0][0]
+    assert out.status == "done" and result.data["image_path"] == "/tmp/screen.png"
+    assert result.text == "Captured the screen."

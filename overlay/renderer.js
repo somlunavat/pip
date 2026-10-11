@@ -14,10 +14,11 @@ const PATHS = {
   nimble: ['Nimble', 'nimble'], worker: ['Agent37 worker', 'worker'], mac: ['Mac', 'mac'],
   watcher: ['Watcher', ''], fast: ['Fast reply', ''], chrome: ['Chrome', ''],
 };
+// Apps a plan's approval-gated steps touch, for "It touches Calendar only."
 const APPS = {
   create_reminder: 'Reminders', create_note: 'Notes', create_calendar_event: 'Calendar',
-  open_url: 'your browser', open_in_browser: 'your browser', open_app: 'an app',
-  show_notification: 'Notifications', speak: 'the speaker',
+  run_shortcut: 'Shortcuts', type_text: 'the front app', save_text_file: 'Documents/Pip',
+  quit_app: 'an open app',
 };
 const PIP_STATES = ['idle', 'listening', 'thinking', 'working', 'alert', 'done'];
 

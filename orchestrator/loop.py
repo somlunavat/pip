@@ -242,7 +242,7 @@ class Agent:
     async def _open_results(self, task_id: str, answer: Answer,
                             results: list[MilestoneResult], emit: Emit) -> str | None:
         """Open the answer's URLs as browser tabs, unless the plan already opened pages."""
-        already = any(r.path == "mac" and r.ok and r.data.get("tool") in mac.DISPLAY_TOOLS
+        already = any(r.path == "mac" and r.ok and r.data.get("tool") in mac.BROWSER_TOOLS
                       for r in results)
         if not self.browser or not answer.open_urls or already:
             return None
@@ -376,9 +376,14 @@ class Agent:
         if not m.tool:
             return _failed(m, "mac", "no_tool")
         value = await self.mac_call(m.tool, m.args)
-        text = value if isinstance(value, str) else str(value)
+        data: dict[str, Any] = {"value": value, "tool": m.tool}
+        if isinstance(value, dict):  # e.g. capture_screen -> {"image_path", "text"}
+            data.update(value)
+            text = str(value.get("text", ""))
+        else:
+            text = value if isinstance(value, str) else str(value)
         return MilestoneResult(milestone_id=m.id, ok=True, path="mac", text=text,
-                               data={"value": value, "tool": m.tool}, latency_ms=_ms(t0))
+                               data=data, latency_ms=_ms(t0))
 
 
 def _card(m: Milestone) -> dict[str, Any]:
