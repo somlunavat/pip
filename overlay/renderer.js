@@ -192,7 +192,8 @@ function taskFor(taskId) {
     stack.prepend(card);
     trimStack();
   }
-  const task = { card, steps: 0, seen: new Set(), title, done: false };
+  const task = { card, steps: 0, seen: new Set(), running: new Map(), finished: 0, title,
+    done: false };
   tasks.set(taskId, task);
   return task;
 }
@@ -342,6 +343,19 @@ function renderAlert(msg) {
   if (!busy() && !hideTimer) scheduleHide(HIDE_AFTER.alert);
 }
 
+// "Step 2 of 3 · Search kayak.com · Nimble", or for work split across workers,
+// "2 of 5 done · 3 running on Agent37".
+function progressText(task, msg) {
+  const workers = [...task.running.values()].filter((p) => p === 'worker').length;
+  if (task.steps > 1 && workers > 1) {
+    return `${task.finished} of ${task.steps} done · ${workers} running on Agent37`;
+  }
+  if (!msg) return `${task.finished} of ${task.steps} done`;
+  const [pathName] = PATHS[msg.path] || [msg.path || ''];
+  const count = task.steps > 1 ? `Step ${Math.min(task.seen.size, task.steps)} of ${task.steps} · ` : '';
+  return `${count}${msg.label}${pathName ? ` · ${pathName}` : ''}`;
+}
+
 // -- server events ----------------------------------------------------------------------
 
 function handle(msg) {
@@ -366,11 +380,18 @@ function handle(msg) {
     }
     case 'doing': {
       const task = taskFor(msg.task_id);
-      if (msg.milestone_id) task.seen.add(msg.milestone_id);
-      const [pathName] = PATHS[msg.path] || [msg.path || ''];
-      const count = task.steps > 1 ? `Step ${Math.min(task.seen.size, task.steps)} of ${task.steps} · ` : '';
-      setSubtitle(`${count}${msg.label}${pathName ? ` · ${pathName}` : ''}`);
+      if (msg.milestone_id) {
+        task.seen.add(msg.milestone_id);
+        task.running.set(msg.milestone_id, msg.path);
+      }
+      setSubtitle(progressText(task, msg));
       setPip('working');
+      break;
+    }
+    case 'milestone_done': {
+      const task = taskFor(msg.task_id);
+      if (task.running.delete(msg.milestone_id)) task.finished += 1;
+      if (task.running.size) setSubtitle(progressText(task));
       break;
     }
     case 'plan':
