@@ -83,6 +83,11 @@ def check_plan(plan: Plan, *, has_workers: bool) -> list[str]:
                 problems.append(f"{m.id}: local milestone has no tool")
             elif problem := mac.validate_args(m.tool, m.args):
                 problems.append(f"{m.id}: {problem}")
+            elif m.tool == "custom_applescript" and (
+                problem := mac.vet_script(str(m.args.get("app", "")),
+                                          str(m.args.get("script", "")))
+            ):
+                problems.append(f"{m.id}: custom action rejected: {problem}")
         elif m.kind == "work" or (m.kind == "read" and path_for(m) == "worker"):
             if _MAC_ONLY.search(m.goal):
                 problems.append(
@@ -379,7 +384,11 @@ class Agent:
         if self.permissions is None:
             return None
         perms = self.permissions
-        tools = [m.tool for m in plan.milestones if m.kind == "local" and m.tool]
+        tools = [
+            f"custom_applescript:{m.args.get('app', '')}" if m.tool == "custom_applescript"
+            else m.tool
+            for m in plan.milestones if m.kind == "local" and m.tool
+        ]
         needed = perms.needed_for(tools)
         for pid in needed:
             if perms.classify(pid) == "ask_os":

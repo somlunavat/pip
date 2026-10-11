@@ -596,3 +596,44 @@ async def test_first_use_of_an_app_waits_for_the_macos_prompt(db: Database) -> N
     assert any("macOS will ask to let Pip use Calendar" in e.get("label", "")
                for e in emit.events)
     assert not any(e["type"] == "permission_needed" for e in emit.events)
+
+
+def test_unsafe_custom_action_is_rejected_at_plan_time() -> None:
+    plan = Plan.model_validate({"milestones": [{
+        "id": "c", "goal": "clean up", "kind": "local", "tool": "custom_applescript",
+        "args": {"app": "Finder", "purpose": "tidy", "script":
+                 'tell application "Finder" to delete every file of desktop'}}]})
+    assert "custom action rejected: scripts can't do deleting things" in \
+        check_plan(plan, has_workers=False)[0]
+
+
+async def test_custom_action_needs_approval_and_app_access(db: Database) -> None:
+    perms = FakePerms({})
+    asked_apps: list[list[str]] = []
+    original = perms.needed_for
+
+    def needed_for(tools: list[str]) -> list[str]:
+        asked_apps.append(tools)
+        return original(tools)
+
+    perms.needed_for = needed_for  # type: ignore[method-assign]
+    approvals: list[str] = []
+
+    async def approve(task_id: str, p: Plan) -> bool:
+        approvals.append(task_id)
+        return True
+
+    async def mac_call(tool: str, args: dict[str, Any]) -> str:
+        return "done"
+
+    plan = {"milestones": [{"id": "c", "goal": "shuffle my music", "kind": "local",
+                            "tool": "custom_applescript", "args": {
+                                "app": "Spotify", "purpose": "shuffle",
+                                "script": 'tell application "Spotify" to set shuffling to true'}}]}
+    emit = Recorder()
+    out = await make_agent(db, FakeLLM([plan]), mac_call=mac_call, permissions=perms).handle(
+        "shuffle spotify", emit, approve)
+    assert out.status == "done" and len(approvals) == 1
+    assert asked_apps == [["custom_applescript:Spotify"]]
+    card = next(e for e in emit.events if e["type"] == "plan")
+    assert card["milestones"][0]["args"]["script"].startswith('tell application "Spotify"')
