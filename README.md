@@ -55,7 +55,8 @@ cp .env.example .env                       # fill in GEMINI_API_KEY and NIMBLE_A
 python -m orchestrator                     # ws://127.0.0.1:8779/ws, token in data/overlay_token
 
 # 2. Overlay (new terminal)
-cd overlay && npm install && npm start     # Option+Space to type, Cmd+Shift+Space to talk
+cd overlay && npm install && npm start     # say "Hey Pip…", or Option+Space to type,
+                                           # Cmd+Shift+Space to talk
                                            # close: Esc, the × button, or double-click outside
 
 # Fallback client, no Electron needed
@@ -66,6 +67,15 @@ python scripts/ws_client.py "compare prices for a Sony WH-1000XM5"
 python -m orchestrator.ask "find a cheap flight to Austin next Friday"
 python -m orchestrator.ask --wait "what's on my calendar today"   # print the answer here
 ```
+
+### "Hey Pip"
+
+Say **"Hey Pip, what's on my calendar today?"** in one breath, or "Hey Pip", pause, then
+the request. A small background app, *Pip Listener* (`overlay/bin/PipListener.app`, built
+by `npm install`), listens with Apple's on-device speech recognition: audio is never sent
+anywhere, and it won't run if on-device recognition isn't available. On first launch
+macOS asks for Microphone and Speech Recognition for Pip Listener. The orange mic dot
+shows while it listens. Type `wake off` (or `wake on`) in the pill to switch it.
 
 ### Permissions
 

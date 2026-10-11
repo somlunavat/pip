@@ -569,6 +569,12 @@ input.addEventListener('keydown', (e) => {
     openSetup();
     return;
   }
+  if (e.key === 'Enter' && /^wake (on|off)$/i.test(input.value.trim())) {
+    const on = /on$/i.test(input.value.trim());
+    input.value = '';
+    setWakeEnabled(on);
+    return;
+  }
   if (e.key === 'Enter' && input.value.trim()) {
     const text = input.value.trim();
     if (send({ type: 'request', text })) {
@@ -673,6 +679,42 @@ async function toggleRecord() {
 
 micBtn.addEventListener('click', toggleRecord);
 window.pip.onToggleRecord(toggleRecord);
+
+// -- "Hey Pip" (on-device wake phrase, see native/listener.swift) -----------------------
+// On by default; type "wake off" / "wake on" in the pill to switch it.
+
+function wakeEnabled() {
+  try { return localStorage.getItem('pip.wake') !== 'off'; } catch { return true; }
+}
+
+function setWakeEnabled(on) {
+  try { localStorage.setItem('pip.wake', on ? 'on' : 'off'); } catch { /* private mode */ }
+  window.pip.setWake(on);
+  showTask(on ? '“Hey Pip” is on' : '“Hey Pip” is off',
+    on ? 'Say “Hey Pip” and what you need. Audio stays on this Mac.' : 'Type “wake on” to turn it back on.');
+  setPip('idle');
+  fit();
+}
+
+window.pip.onWake(({ phase, text }) => {
+  if (phase === 'wake') {
+    showTask('Listening…', 'Go ahead, I’m listening');
+    setPip('listening');
+  } else if (phase === 'command' && text) {
+    if (send({ type: 'request', text })) startRequest(text);
+  } else if (phase === 'cancel') {
+    if (!busy()) showInput();
+    setPip('idle');
+  } else if (phase === 'error') {
+    showTask('“Hey Pip” can’t listen', text);
+    setPip('alert', 3000);
+  } else if (phase === 'missing') {
+    console.info('Hey Pip listener not built; run npm run build:native');
+  }
+  fit();
+});
+
+window.pip.setWake(wakeEnabled());
 
 connect();
 fit();
