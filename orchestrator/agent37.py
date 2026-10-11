@@ -25,6 +25,7 @@ from typing import Any
 import httpx
 
 from orchestrator.models import Milestone, MilestoneResult, Source
+from orchestrator.security import fence
 
 WORKER_PERSONA = """You are a worker for a personal assistant.
 Rules you must follow:
@@ -319,10 +320,12 @@ class Dispatcher:
     - 504 upstream_timeout    -> read the session transcript
     """
 
-    def __init__(self, pool: WorkerPool, *, max_attempts: int = 3,
+    def __init__(self, pool: WorkerPool, *, max_attempts: int = 3, queue_wait_s: float = 900,
                  transcript_wait_s: float = 600, transcript_poll_s: float = 15):
         self.pool = pool
         self.max_attempts = max_attempts
+        # Fan-outs bigger than the pool queue for a free session instead of failing.
+        self.queue_wait_s = queue_wait_s
         self.transcript_wait_s = transcript_wait_s
         self.transcript_poll_s = transcript_poll_s
 
@@ -343,7 +346,7 @@ class Dispatcher:
         total_cost = 0.0
         for attempt in range(self.max_attempts):
             try:
-                worker = await self.pool.acquire(exclude=tried)
+                worker = await self.pool.acquire(exclude=tried, timeout=self.queue_wait_s)
             except NoWorkerAvailable as exc:
                 last_error = "no_worker"
                 if not tried:
@@ -426,6 +429,27 @@ def last_assistant_text(transcript: dict[str, Any]) -> str:
         if str(content).strip():
             return str(content)
     return ""
+
+
+UPSTREAM_CHARS = 6000
+
+
+def work_prompt(m: Milestone, upstream: list[MilestoneResult]) -> str:
+    """A worker sees only its own goal, so a dependent step gets the results of the
+    steps it depends on, fenced as data."""
+    if not upstream:
+        return m.goal
+    blocks = []
+    for r in upstream:
+        body = r.text or (r.error or "no output")
+        files = r.data.get("files")
+        if files:
+            body += "\nFiles: " + ", ".join(files)
+        source = r.sources[0].url if r.sources else f"step {r.milestone_id}"
+        blocks.append(f"Step {r.milestone_id} ({'ok' if r.ok else 'failed'}):\n"
+                      + fence(body, source, limit=UPSTREAM_CHARS))
+    return (f"{m.goal}\n\nResults from the earlier steps this builds on:\n\n"
+            + "\n\n".join(blocks))
 
 
 def read_prompt(m: Milestone) -> str:
