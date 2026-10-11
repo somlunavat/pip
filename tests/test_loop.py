@@ -212,7 +212,7 @@ async def test_calendar_request_regression(db: Database) -> None:
     ]}
     llm = FakeLLM([bad, good])
     agent = make_agent(db, llm, mac_call=mac_call,
-                       work=lambda m, t, e: None)  # workers exist, still must not be used
+                       work=lambda m, t, e, up: None)  # workers exist, still must not be used
     out = await agent.handle("create an event at 4:45 today", Recorder(), always_approve)
     assert out.status == "done"
     assert [c[0] for c in calls] == ["create_calendar_event"]  # Calendar was not opened first
@@ -349,3 +349,67 @@ async def test_no_double_open_when_plan_already_opened_pages(db: Database) -> No
     await make_agent(db, llm, browser=browser, mac_call=mac_call).handle(
         "pull up a.example", Recorder(), always_approve)
     assert opened == []
+
+
+async def test_complex_task_fans_out_to_workers_and_merges(db: Database) -> None:
+    """Issue #46: independent pieces run on workers at the same time, and the merge
+    step receives every piece's result."""
+    running = 0
+    peak = 0
+    merge_upstream: list[MilestoneResult] = []
+
+    async def work(m: Milestone, task_id: str, emit, upstream: list[MilestoneResult]):
+        nonlocal running, peak
+        if m.id == "merge":
+            merge_upstream.extend(upstream)
+            return MilestoneResult(milestone_id=m.id, ok=True, path="worker",
+                                   text="spreadsheet built", data={"worker_id": "w1"})
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.02)
+        running -= 1
+        return MilestoneResult(milestone_id=m.id, ok=True, path="worker",
+                               text=f"findings for {m.id}", data={"worker_id": "w1"})
+
+    pieces = [{"id": f"p{i}", "goal": f"Research company {i} in depth", "kind": "work",
+               "estimated_seconds": 120} for i in range(4)]
+    merge = {"id": "merge", "goal": "Build a comparison spreadsheet", "kind": "work",
+             "writes_file": True, "depends_on": [p["id"] for p in pieces]}
+    llm = FakeLLM([{"summary": "research 4 companies", "milestones": [*pieces, merge]}])
+    seen_ctx: dict[str, str] = {}
+    original = llm.plan
+
+    async def spy(text, context, **kw):
+        seen_ctx.update(context)
+        return await original(text, context, **kw)
+
+    llm.plan = spy  # type: ignore[method-assign]
+    emit = Recorder()
+    agent = make_agent(db, llm, work=work, worker_capacity=4)
+    out = await agent.handle("compare 4 companies into a spreadsheet", emit, always_approve)
+
+    assert out.status == "done" and peak == 4
+    assert seen_ctx["worker_capacity"] == "4"
+    assert sorted(r.milestone_id for r in merge_upstream) == ["p0", "p1", "p2", "p3"]
+    done = [e for e in emit.events if e["type"] == "milestone_done"]
+    assert len(done) == 5 and all(e["ok"] for e in done)
+
+
+def test_too_many_worker_pieces_is_rejected() -> None:
+    plan = Plan.model_validate({"milestones": [
+        {"id": f"p{i}", "goal": f"research item {i}", "kind": "work"} for i in range(13)]})
+    assert "too many" in check_plan(plan, has_workers=True)[0]
+
+
+async def test_no_workers_means_zero_capacity(db: Database) -> None:
+    seen: dict[str, str] = {}
+    llm = FakeLLM([{"milestones": [read("a")]}])
+    original = llm.plan
+
+    async def spy(text, context, **kw):
+        seen.update(context)
+        return await original(text, context, **kw)
+
+    llm.plan = spy  # type: ignore[method-assign]
+    await make_agent(db, llm, worker_capacity=8).handle("x", Recorder(), always_approve)
+    assert seen["worker_capacity"] == "0"

@@ -56,6 +56,22 @@ Kinds:
   "watch": {{"target": url, "extractor": "comma-separated fields to track",
   "interval_s": seconds}}.
 
+Splitting big jobs across workers:
+- The Mac context's worker_capacity is how many worker sessions can run at once.
+  If it is 0, never use work.
+- For a large job (researching or comparing many items in depth, a deliverable with
+  several independent parts, long multi-site browsing), split it into independent
+  work milestones that run at the same time: one per item or part, with no
+  depends_on between them. Up to worker_capacity run at once; extras queue. Use at
+  most 12 pieces, grouping related items if there are more.
+- Each piece's goal must be self-contained: a worker sees only its own goal plus the
+  results of the milestones it depends on, never the user's request or other pieces.
+- If the user wants a file (spreadsheet, document, slides, code), add one final work
+  milestone that depends on every piece and builds the file from their results.
+  Otherwise add no merge milestone: the answer step combines the results.
+- Quick lookups stay as read milestones (Nimble is faster); split to workers only
+  when each piece needs real browsing, logging in, or producing a file.
+
 Rules:
 - Prefer few milestones. Independent reads have no depends_on so they run in parallel.
 - Use the Mac context's "now" to resolve relative times like "today at 4:45" or
@@ -261,6 +277,7 @@ def _format_context(context: dict[str, str]) -> str:
     """App and window are trusted metadata; URL and clipboard are fenced."""
     lines = [
         f"now: {context.get('now', '')}",
+        f"worker_capacity: {context.get('worker_capacity', '0')}",
         f"active_app: {context.get('active_app', '')}",
         f"window_title: {context.get('window_title', '')}",
         f"browser_url: {context.get('browser_url', '')}",
