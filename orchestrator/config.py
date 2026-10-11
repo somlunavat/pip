@@ -18,6 +18,14 @@ def _env_list(name: str) -> list[str]:
     return [part.strip() for part in _env(name).split(",") if part.strip()]
 
 
+def _open_mode(value: str) -> str:
+    """PIP_OPEN_RESULTS: ask (default), always, or never. Old values 1/0 map to ask/never."""
+    value = value.lower()
+    if value in ("0", "never", "off", "false"):
+        return "never"
+    return "always" if value == "always" else "ask"
+
+
 @dataclass(frozen=True)
 class Settings:
     gemini_api_key: str = ""
@@ -43,7 +51,7 @@ class Settings:
     db_path: Path = Path("data/pip.db")
     daily_cap_usd: float = 10.0
     kill_switch: bool = False
-    open_results: bool = True
+    open_results: str = "ask"  # ask | always | never
 
     def missing(self) -> list[str]:
         """Required keys that are not set (workers are optional)."""
@@ -79,5 +87,5 @@ class Settings:
             db_path=Path(_env("PIP_DB_PATH", str(cls.db_path))),
             daily_cap_usd=float(_env("PIP_DAILY_CAP_USD", str(cls.daily_cap_usd))),
             kill_switch=_env("PIP_KILL_SWITCH", "0") == "1",
-            open_results=_env("PIP_OPEN_RESULTS", "1") != "0",
+            open_results=_open_mode(_env("PIP_OPEN_RESULTS", "ask")),
         )
