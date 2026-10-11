@@ -4,55 +4,76 @@
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ws://127.0.0.1:*; media-src 'self' blob:">
-  <title>pip</title>
+  <title>Pip</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <main id="shell">
-    <div id="pill" class="pill" data-state="idle">
-      <span class="orb" aria-hidden="true"></span>
-      <input id="prompt" type="text" autocomplete="off" spellcheck="false"
-             placeholder="Ask anything, or say “watch this page”…" aria-label="Request">
-      <span id="status" class="status" aria-live="polite"></span>
-      <button id="mic" class="icon-btn" title="Record (⌘⇧Space)" aria-label="Record">●</button>
+    <div id="pill" class="pill" data-mode="input">
+      <img id="pip" class="pip" data-state="idle" src="assets/pip/pip-idle.svg" alt="" draggable="false">
+      <div class="pill-text">
+        <input id="prompt" type="text" autocomplete="off" spellcheck="false"
+               placeholder="Ask Pip anything…" aria-label="Request">
+        <div class="task">
+          <div id="title" class="title"></div>
+          <div id="subtitle" class="subtitle" aria-live="polite"></div>
+        </div>
+      </div>
+      <button id="mic" class="mic" title="Talk to Pip (⌘⇧Space)" aria-label="Record">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z"/></svg>
+      </button>
     </div>
     <section id="stack" class="stack"></section>
   </main>
 
-  <template id="tpl-card">
-    <article class="card">
-      <div class="progress"></div>
-      <div class="body"></div>
-      <ul class="sources"></ul>
-      <footer class="meta"></footer>
+  <template id="tpl-result">
+    <article class="card result">
+      <h2 class="headline"></h2>
+      <p class="summary"></p>
+      <ul class="rows"></ul>
+      <footer class="foot">
+        <div class="chips"></div>
+        <div class="links">
+          <button class="link" data-act="copy">Copy</button>
+          <button class="link" data-act="open">Open sources</button>
+        </div>
+      </footer>
     </article>
   </template>
 
   <template id="tpl-plan">
     <article class="card plan">
-      <h3>Proceed with these steps?</h3>
-      <p class="summary"></p>
+      <header class="plan-head">
+        <img class="pip small" src="assets/pip/pip-thinking.svg" alt="">
+        <div>
+          <h2 class="headline"></h2>
+          <p class="touches"></p>
+        </div>
+      </header>
       <ol class="steps"></ol>
-      <div class="actions">
-        <button class="btn primary" data-act="approve">Proceed</button>
+      <div class="buttons">
         <button class="btn" data-act="cancel">Cancel</button>
+        <button class="btn primary" data-act="approve">Proceed</button>
       </div>
     </article>
   </template>
 
   <template id="tpl-alert">
     <article class="card alert">
-      <h3>Change detected</h3>
-      <p class="target"></p>
-      <p class="desc"></p>
-      <div class="actions">
+      <header class="alert-head">
+        <span class="app-icon"><img src="assets/pip/pip-alert.svg" alt=""></span>
+        <span class="app-name">Pip</span>
+        <span class="when">now</span>
+      </header>
+      <h3 class="alert-title"></h3>
+      <p class="alert-body"></p>
+      <div class="buttons">
         <button class="btn" data-useful="true">Useful</button>
         <button class="btn" data-useful="false">Not useful</button>
       </div>
     </article>
   </template>
 
-  <script src="markdown.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

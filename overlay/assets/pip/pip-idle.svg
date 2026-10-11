@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="384" height="384" viewBox="-6 -10 76 76"><title>Pip idle, eyes half closed</title>
+        <path d="M32 6C47 6 58 17 58 34C58 50 48 58 32 58C16 58 6 50 6 34C6 17 17 6 32 6Z" fill="#86b6ff"/>
+        <ellipse cx="22" cy="18" rx="8" ry="4" fill="#ffffff" opacity=".4" transform="rotate(-25 22 18)"/>
+        <circle cx="16" cy="39" r="4" fill="#ff9db5" opacity=".6"/><circle cx="48" cy="39" r="4" fill="#ff9db5" opacity=".6"/>
+        <path d="M20 32q4 4 8 0M36 32q4 4 8 0" stroke="#1d2a44" stroke-width="2.6" stroke-linecap="round" fill="none"/>
+        <path d="M29 42q3 2 6 0" stroke="#1d2a44" stroke-width="2.4" stroke-linecap="round" fill="none"/>
+      </svg>

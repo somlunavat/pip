@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="384" height="384" viewBox="-6 -10 76 76"><title>Pip working, happy squint, arms up, sparkle</title>
+        <ellipse cx="3" cy="36" rx="4.5" ry="3" fill="#6aa3f5" transform="rotate(-35 3 36)"/><ellipse cx="61" cy="36" rx="4.5" ry="3" fill="#6aa3f5" transform="rotate(35 61 36)"/>
+        <path d="M32 6C47 6 58 17 58 34C58 50 48 58 32 58C16 58 6 50 6 34C6 17 17 6 32 6Z" fill="#86b6ff"/>
+        <ellipse cx="22" cy="18" rx="8" ry="4" fill="#ffffff" opacity=".4" transform="rotate(-25 22 18)"/>
+        <circle cx="15" cy="40" r="4" fill="#ff9db5" opacity=".6"/><circle cx="49" cy="40" r="4" fill="#ff9db5" opacity=".6"/>
+        <path d="M20 33q4 -5 8 0M36 33q4 -5 8 0" stroke="#1d2a44" stroke-width="2.6" stroke-linecap="round" fill="none"/>
+        <path d="M26 40q6 9 12 0Z" fill="#1d2a44"/>
+        <path d="M62 -2L64.5 4.5L71 7L64.5 9.5L62 16L59.5 9.5L53 7L59.5 4.5Z" fill="#ff9f0a"></path>
+      </svg>
