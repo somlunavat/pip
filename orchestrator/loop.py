@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from orchestrator import mac, verifier
 from orchestrator.answer import clean_answer, should_open
@@ -33,6 +33,20 @@ MacCall = Callable[[str, dict[str, Any]], Awaitable[Any]]
 WorkFn = Callable[[Milestone, str, Emit, list[MilestoneResult]], Awaitable[MilestoneResult]]
 WatchFn = Callable[[Milestone, str], Awaitable[MilestoneResult]]
 BrowserFn = Callable[[list[str]], Awaitable[str]]
+# Ask the user for permissions mid-task: (task_id, permission ids) -> they said yes
+AccessFn = Callable[[str, list[str]], Awaitable[bool]]
+
+
+class PermissionsLike(Protocol):
+    """orchestrator.permissions, or a fake in tests."""
+
+    def needed_for(self, tools: list[str]) -> list[str]: ...
+
+    def classify(self, pid: str) -> str: ...
+
+    def describe(self, pid: str) -> dict[str, str]: ...
+
+    async def request(self, pid: str) -> str: ...
 RevealFn = Callable[[str], Awaitable[str]]
 
 
@@ -137,6 +151,7 @@ class Agent:
         reveal: RevealFn | None = mac.reveal_in_finder,
         open_results: str = "ask",
         location: str = "",
+        permissions: PermissionsLike | None = None,
         max_replans: int = 1,
     ):
         self.db = db
@@ -150,17 +165,19 @@ class Agent:
         self.browser = browser  # None turns off pulling results up in the browser
         self.open_results = open_results  # ask: only when the request asks for pages
         self.location = location  # described to the planner; see config.describe_location
+        self.permissions = permissions  # None: don't check access before running
         self.worker_capacity = worker_capacity if work else 0
         self.reveal = reveal  # shows files that workers made; None turns it off
         self.max_replans = max_replans
 
     async def handle(self, text: str, emit: Emit, approve: Approve,
-                     *, context: dict[str, str] | None = None) -> TaskOutcome:
+                     *, context: dict[str, str] | None = None,
+                     access: AccessFn | None = None) -> TaskOutcome:
         start = time.perf_counter()
         task_id = self.db.create_task(text)
         await emit({"type": "thinking", "task_id": task_id, "text": text})
         try:
-            outcome = await self._run(task_id, text, emit, approve, context, start)
+            outcome = await self._run(task_id, text, emit, approve, context, start, access)
         except asyncio.CancelledError:
             # The user pressed Stop. Worker turns cancel themselves on the way out.
             self.db.finish_task(task_id, "cancelled")
@@ -190,7 +207,8 @@ class Agent:
         return outcome
 
     async def _run(self, task_id: str, text: str, emit: Emit, approve: Approve,
-                   context: dict[str, str] | None, start: float) -> TaskOutcome:
+                   context: dict[str, str] | None, start: float,
+                   access: AccessFn | None = None) -> TaskOutcome:
         # Sense
         t0 = time.perf_counter()
         ctx = dict(context if context is not None else await self.sense())
@@ -242,6 +260,15 @@ class Agent:
                             "display": "pill", "sources": []})
                 return TaskOutcome(task_id, "cancelled", "Cancelled.")
             self.db.log_event("gate", task_id=task_id, status="approved")
+
+        # Access: ask for any permission the plan needs before its first step runs
+        blocked = await self._ensure_access(task_id, plan, emit, access)
+        if blocked:
+            await emit({"type": "response", "task_id": task_id, "text": blocked,
+                        "display": "pill", "sources": [], "elapsed_ms": _ms(start),
+                        "paths": [], "answer": {"headline": blocked, "summary": "",
+                                                "rows": []}})
+            return TaskOutcome(task_id, "blocked", blocked)
 
         # Act + Verify
         results = await self._act(task_id, text, ctx, layers, emit)
@@ -339,6 +366,52 @@ class Agent:
                 pending = [] if bad else dependency_groups(new_plan)
                 self.db.log_event("replan", task_id=task_id, status="invalid" if bad else "ok")
         return list(results.values())
+
+    async def _ensure_access(self, task_id: str, plan: Plan, emit: Emit,
+                             access: AccessFn | None) -> str | None:
+        """Make sure the plan's Mac steps have the permissions they need.
+
+        Automation that was never asked: macOS shows its own prompt on first use and
+        holds the step until the user answers, so trigger it now with a long wait
+        and say what's coming. Missing Accessibility or Screen Recording, or denied
+        Automation: pause and ask the user. Returns a message if still blocked.
+        """
+        if self.permissions is None:
+            return None
+        perms = self.permissions
+        tools = [m.tool for m in plan.milestones if m.kind == "local" and m.tool]
+        needed = perms.needed_for(tools)
+        for pid in needed:
+            if perms.classify(pid) == "ask_os":
+                name = perms.describe(pid)["name"]
+                await emit({"type": "doing", "task_id": task_id, "path": "mac",
+                            "label": f"macOS will ask to let Pip use {name}. Click OK"})
+                result = await perms.request(pid)
+                self.db.log_event("access.os", task_id=task_id, status=result,
+                                  error_code=pid)
+        missing = [pid for pid in needed if perms.classify(pid) != "granted"]
+        if not missing:
+            return None
+        items = [perms.describe(pid) for pid in missing]
+        names = " and ".join(i["name"] for i in items)
+        if access is not None:
+            await emit({"type": "permission_needed", "task_id": task_id, "items": items,
+                        "text": f"Pip needs {names} for this."})
+            granted = await access(task_id, missing)
+            self.db.log_event("access.ask", task_id=task_id,
+                              status="granted" if granted else "declined",
+                              error_code=",".join(missing))
+            if granted:
+                missing = [pid for pid in missing if perms.classify(pid) != "granted"]
+                if not missing:
+                    return None
+            else:
+                return f"Okay, not now. Pip needs {names} to do that."
+        still = " and ".join(perms.describe(pid)["name"] for pid in missing)
+        hint = (" macOS applies Screen Recording after you restart Pip."
+                if "screen" in missing else "")
+        return (f"Pip still needs {still}. Allow it in System Settings > Privacy & Security, "
+                f"then ask again.{hint}")
 
     def _problems(self, plan: Plan) -> list[str]:
         try:
