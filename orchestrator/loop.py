@@ -196,7 +196,7 @@ class Agent:
         for m in plan.milestones:
             self.db.create_subtask(task_id, f"{task_id}:{m.id}", m.kind, m.goal)
         self.db.log_event("plan", task_id=task_id, status="ok")
-        await emit({"type": "ack", "task_id": task_id,
+        await emit({"type": "ack", "task_id": task_id, "steps": len(plan.milestones),
                     "text": plan.summary or f"{len(plan.milestones)} steps"})
 
         # Gate

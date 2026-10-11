@@ -5,15 +5,15 @@
 //   Cmd+Shift+Space    start/stop a voice recording
 'use strict';
 
-const { app, BrowserWindow, globalShortcut, ipcMain, Notification, screen,
-  session, systemPreferences } = require('electron');
+const { app, BrowserWindow, clipboard, globalShortcut, ipcMain, Notification, screen,
+  session, shell, systemPreferences } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
-const WIDTH = 560;
-const PILL_HEIGHT = 72;
-const MAX_HEIGHT = 640;
+const WIDTH = 640;
+const PILL_HEIGHT = 120;
+const MAX_HEIGHT = 760;
 
 let win = null;
 
@@ -32,7 +32,7 @@ function createWindow() {
     width: WIDTH,
     height: PILL_HEIGHT,
     x: Math.round(workArea.x + (workArea.width - WIDTH) / 2),
-    y: workArea.y + 48,
+    y: workArea.y + 36,
     frame: false,
     transparent: true,
     resizable: false,
@@ -41,8 +41,7 @@ function createWindow() {
     skipTaskbar: true,
     show: false,
     hasShadow: false,
-    vibrancy: 'hud',
-    visualEffectState: 'active',
+    backgroundColor: '#00000000',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -57,9 +56,17 @@ function createWindow() {
   // Never navigate away or open new windows from the overlay; links go to the browser.
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//.test(url)) require('electron').shell.openExternal(url);
+    if (isHttp(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
+}
+
+function isHttp(url) {
+  try {
+    return ['http:', 'https:'].includes(new URL(String(url)).protocol);
+  } catch {
+    return false;
+  }
 }
 
 function show(focus = true) {
@@ -103,6 +110,12 @@ app.whenReady().then(async () => {
   });
   ipcMain.on('overlay:hide', () => win.hide());
   ipcMain.on('overlay:show', () => show(false));
+  ipcMain.on('overlay:open-urls', (_e, urls) => {
+    for (const url of (Array.isArray(urls) ? urls : []).slice(0, 5)) {
+      if (isHttp(url)) shell.openExternal(url);
+    }
+  });
+  ipcMain.on('overlay:copy', (_e, text) => clipboard.writeText(String(text).slice(0, 10000)));
   ipcMain.on('overlay:notify', (_e, { title, body }) => {
     // Alerts surface as a macOS notification when the overlay is hidden.
     if (!win.isVisible() && Notification.isSupported()) {

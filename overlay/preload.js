@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('pip', {
   hide: () => ipcRenderer.send('overlay:hide'),
   show: () => ipcRenderer.send('overlay:show'),
   notify: (title, body) => ipcRenderer.send('overlay:notify', { title, body }),
+  openUrls: (urls) => ipcRenderer.send('overlay:open-urls', urls),
+  copy: (text) => ipcRenderer.send('overlay:copy', text),
   onShown: (fn) => ipcRenderer.on('overlay:shown', () => fn()),
   onToggleRecord: (fn) => ipcRenderer.on('overlay:toggle-record', () => fn()),
 });
